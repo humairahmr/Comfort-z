@@ -50,7 +50,7 @@ Prerequisites: Python 3.11+ and a Gemini API key from Google AI Studio. For Vert
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 ```
 
@@ -105,16 +105,23 @@ Default storage is `data/observations.json`. Firestore is used only when `OBSERV
 3. In `.env`, set `OBSERVATION_STORE=firestore` and `GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID`. Optionally set `FIRESTORE_OBSERVATIONS_COLLECTION=observations`.
 4. Run the normal Comfort-z command. If Firestore cannot initialize or respond, Comfort-z reports a storage error with credential/network guidance; it never silently changes the configured store.
 
-## Cloud Run
+## Cloud Run deployment preparation
 
-Create a project, enable Cloud Run and Firestore, authenticate, then deploy:
+The container starts the minimal HTTP API with Uvicorn at `0.0.0.0:$PORT`. It provides:
+
+- `GET /health` — process health, selected store, ADK agent, and model; no external request.
+- `POST /monitor` — calls the existing `monitor_animal` ADK tool with `animal_id`, `image_path`, and optional animal metadata.
+- `GET /animals/{animal_id}/observations?limit=5` — calls the existing repository-backed history tool.
+
+Before deploying, create a Firestore Native database, enable Cloud Run, Cloud Build, Artifact Registry, Firestore, and Secret Manager APIs, then create a dedicated Cloud Run service account. Grant it `roles/datastore.user` for Firestore and `roles/secretmanager.secretAccessor` for the Gemini API-key secret. Cloud Run uses this service account as Application Default Credentials for Firestore; do not upload service-account JSON files.
+
+Create a Secret Manager secret named `comfort-z-gemini-api-key` containing only your Gemini Developer API key. Then deploy from the repository root:
 
 ```powershell
-gcloud auth application-default login
-gcloud run deploy comfort-z --source . --region YOUR_REGION --project YOUR_PROJECT --set-env-vars OBSERVATION_STORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT,GEMINI_MODEL=gemini-3.5-flash
+gcloud run deploy comfort-z --source . --region YOUR_REGION --project YOUR_PROJECT_ID --service-account comfort-z-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com --set-env-vars OBSERVATION_STORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,FIRESTORE_OBSERVATIONS_COLLECTION=observations,GEMINI_MODEL=gemini-3.5-flash --set-secrets GOOGLE_API_KEY=comfort-z-gemini-api-key:latest
 ```
 
-For Gemini Developer API, configure `GEMINI_API_KEY` with Cloud Run Secret Manager. For a Google Cloud production setup, prefer a Cloud Run service identity with Vertex AI and Firestore permissions and set `GOOGLE_GENAI_USE_VERTEXAI=true`.
+The container image excludes `.env`, virtual environments, local JSON data, ADC files, service-account/credential JSON files, tests, and demo videos. Use `GET /health` after deployment to confirm startup. For a Vertex AI configuration instead of a Gemini API-key secret, set `GOOGLE_GENAI_USE_VERTEXAI=true` and grant the service account the appropriate Vertex AI role.
 
 ## Demo flow and limitations
 

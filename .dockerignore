@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.adk/
+data/
+demo_videos/
+tests/
+*service-account*.json
+*credentials*.json
+application_default_credentials.json
