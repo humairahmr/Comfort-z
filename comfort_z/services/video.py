@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 from threading import Event
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any
 
 import cv2
@@ -24,9 +25,11 @@ class VideoMonitoringService:
         self,
         monitoring_tool: MonitoringTool = monitor_animal,
         cv2_module: Any = cv2,
+        sleep_fn: Callable[[float], None] = sleep,
     ) -> None:
         self._monitoring_tool = monitoring_tool
         self._cv2 = cv2_module
+        self._sleep = sleep_fn
         self._stop_event = Event()
 
     def stop(self) -> None:
@@ -41,24 +44,33 @@ class VideoMonitoringService:
         max_samples: int | None = None,
         animal_name: str | None = None,
         expected_species: str | None = None,
+        max_transient_retries: int = 1,
+        base_retry_delay_seconds: float = 1.0,
+        stop_retry_delay_seconds: float = 30.0,
     ) -> VideoMonitoringSession:
         """Run a resilient sampled monitoring session.
 
         ``source`` is a local video path or an OpenCV webcam device index such
         as ``0``. Optional animal metadata tells Gemini which known animal to
         look for. Each sampled JPEG is passed to ``monitor_animal``; Gemini,
-        storage, comparison, and alerts are not reimplemented here.
+        storage, comparison, and alerts are not reimplemented here. ``max_samples``
+        limits selected-frame attempts, including attempts that fail Gemini analysis.
         """
         if sample_interval_seconds <= 0:
             raise ValueError("sample_interval_seconds must be greater than zero.")
         if max_samples is not None and max_samples <= 0:
             raise ValueError("max_samples must be greater than zero when supplied.")
+        if max_transient_retries < 0:
+            raise ValueError("max_transient_retries cannot be negative.")
+        if base_retry_delay_seconds <= 0 or stop_retry_delay_seconds <= 0:
+            raise ValueError("Retry delays must be greater than zero.")
 
         self._stop_event.clear()
         is_webcam = isinstance(source, int)
         source_label = f"webcam:{source}" if is_webcam else str(Path(source))
         failures: list[str] = []
         samples: list[VideoFrameSample] = []
+        attempted_samples = 0
         ended_reason = "completed"
 
         if not is_webcam and not Path(source).is_file():
@@ -67,6 +79,7 @@ class VideoMonitoringService:
                 animal_name=animal_name,
                 expected_species=expected_species,
                 source=source_label,
+                attempted_samples=attempted_samples,
                 failures=[f"Video file does not exist: {source}"],
                 ended_reason="invalid_source",
             )
@@ -78,6 +91,7 @@ class VideoMonitoringService:
                 animal_name=animal_name,
                 expected_species=expected_species,
                 source=source_label,
+                attempted_samples=attempted_samples,
                 failures=[f"Could not open {source_label}."],
                 ended_reason="source_unavailable",
             )
@@ -111,23 +125,40 @@ class VideoMonitoringService:
                     ):
                         continue
                     last_sample_at = sampling_time
+                    if max_samples is not None and attempted_samples >= max_samples:
+                        ended_reason = "max_samples_reached"
+                        break
+                    attempted_samples += 1
 
                     frame_path = Path(frame_directory) / f"frame_{frame_index:06d}.jpg"
                     if not self._cv2.imwrite(str(frame_path), frame):
                         failures.append(f"Could not encode sampled frame {frame_index}.")
+                        if max_samples is not None and attempted_samples >= max_samples:
+                            ended_reason = "max_samples_reached"
+                            break
                         continue
 
                     source_info = self._source_info(source_label, frame_index, source_seconds)
-                    try:
-                        result = self._monitoring_tool(
-                            animal_id=animal_id,
-                            image_path=str(frame_path),
-                            source_info=source_info,
-                            animal_name=animal_name,
-                            expected_species=expected_species,
-                        )
-                    except Exception as error:  # Continue with the next sampled frame.
-                        failures.append(f"Frame {frame_index} monitoring failed: {error}")
+                    result, failure, transient_end_reason = self._monitor_frame_with_retries(
+                        animal_id=animal_id,
+                        image_path=str(frame_path),
+                        source_info=source_info,
+                        animal_name=animal_name,
+                        expected_species=expected_species,
+                        frame_index=frame_index,
+                        max_transient_retries=max_transient_retries,
+                        base_retry_delay_seconds=base_retry_delay_seconds,
+                        stop_retry_delay_seconds=stop_retry_delay_seconds,
+                    )
+                    if failure:
+                        failures.append(failure)
+                    if transient_end_reason:
+                        ended_reason = transient_end_reason
+                        break
+                    if result is None:
+                        if max_samples is not None and attempted_samples >= max_samples:
+                            ended_reason = "max_samples_reached"
+                            break
                         continue
 
                     samples.append(
@@ -138,7 +169,7 @@ class VideoMonitoringService:
                             monitoring_result=result,
                         )
                     )
-                    if max_samples is not None and len(samples) >= max_samples:
+                    if max_samples is not None and attempted_samples >= max_samples:
                         ended_reason = "max_samples_reached"
                         break
 
@@ -152,6 +183,7 @@ class VideoMonitoringService:
             animal_name=animal_name,
             expected_species=expected_species,
             source=source_label,
+            attempted_samples=attempted_samples,
             samples=samples,
             failures=failures,
             ended_reason=ended_reason,
@@ -167,3 +199,91 @@ class VideoMonitoringService:
     def _source_info(source: str, frame_index: int, seconds: float | None) -> str:
         position = "live" if seconds is None else f"{seconds:.2f}s"
         return f"source={source}; frame={frame_index}; position={position}"
+
+    def _monitor_frame_with_retries(
+        self,
+        *,
+        animal_id: str,
+        image_path: str,
+        source_info: str,
+        animal_name: str | None,
+        expected_species: str | None,
+        frame_index: int,
+        max_transient_retries: int,
+        base_retry_delay_seconds: float,
+        stop_retry_delay_seconds: float,
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        """Retry only one transient Gemini failure class for this one frame."""
+        for retry_number in range(max_transient_retries + 1):
+            try:
+                return (
+                    self._monitoring_tool(
+                        animal_id=animal_id,
+                        image_path=image_path,
+                        source_info=source_info,
+                        animal_name=animal_name,
+                        expected_species=expected_species,
+                    ),
+                    None,
+                    None,
+                )
+            except Exception as error:
+                transient_kind = self._transient_kind(error)
+                if transient_kind is None:
+                    return None, f"Frame {frame_index} monitoring failed: {error}", None
+
+                retry_delay = self._retry_delay_seconds(
+                    error,
+                    retry_number,
+                    base_retry_delay_seconds,
+                )
+                ended_reason = (
+                    "quota_exhausted" if transient_kind == "quota" else "service_unavailable"
+                )
+                if retry_delay >= stop_retry_delay_seconds:
+                    return (
+                        None,
+                        f"Frame {frame_index} {transient_kind} error; server requested "
+                        f"retry after {retry_delay:.1f}s, stopping session.",
+                        ended_reason,
+                    )
+                if retry_number >= max_transient_retries:
+                    return (
+                        None,
+                        f"Frame {frame_index} {transient_kind} error after "
+                        f"{retry_number + 1} attempt(s): {error}. Stopping session.",
+                        ended_reason,
+                    )
+                self._sleep(retry_delay)
+
+        raise AssertionError("Transient retry loop should always return.")
+
+    @staticmethod
+    def _transient_kind(error: Exception) -> str | None:
+        raw_message = f"{type(error).__name__} {error}"
+        message = raw_message.lower()
+        if "429" in message or "resource_exhausted" in message:
+            return "quota"
+        if "503" in message or "UNAVAILABLE" in raw_message or "statuscode.unavailable" in message:
+            return "service"
+        return None
+
+    @staticmethod
+    def _retry_delay_seconds(
+        error: Exception,
+        retry_number: int,
+        base_retry_delay_seconds: float,
+    ) -> float:
+        for attribute in ("retry_after_seconds", "retry_after", "retry_delay"):
+            value = getattr(error, attribute, None)
+            if isinstance(value, (int, float)) and value >= 0:
+                return float(value)
+            seconds = getattr(value, "seconds", None)
+            nanos = getattr(value, "nanos", 0)
+            if isinstance(seconds, (int, float)):
+                return float(seconds) + float(nanos or 0) / 1_000_000_000
+
+        match = re.search(r"retry (?:after|in)\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b", str(error), re.I)
+        if match:
+            return float(match.group(1))
+        return base_retry_delay_seconds * (2**retry_number)

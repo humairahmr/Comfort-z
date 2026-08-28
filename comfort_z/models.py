@@ -82,6 +82,7 @@ class VideoMonitoringSession(BaseModel):
     animal_name: str | None = None
     expected_species: str | None = None
     source: str
+    attempted_samples: int = 0
     samples: list[VideoFrameSample] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     ended_reason: str

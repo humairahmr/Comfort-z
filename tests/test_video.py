@@ -43,6 +43,12 @@ class FakeCv2:
         return True
 
 
+class TransientGeminiError(RuntimeError):
+    def __init__(self, message: str, retry_after_seconds: float | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 def test_video_sampling_calls_existing_monitoring_tool_and_keeps_provenance(tmp_path):
     video = tmp_path / "animal.mp4"
     video.write_bytes(b"not-read-by-fake-capture")
@@ -116,3 +122,135 @@ def test_stop_ends_a_session_normally(tmp_path):
     assert len(session.samples) == 1
     assert session.ended_reason == "stopped"
     assert capture.released
+
+
+def test_max_samples_bounds_attempts_even_when_every_frame_fails(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    capture = FakeCapture([object()] * 7, [index * 1000 for index in range(7)])
+    calls = 0
+
+    def monitoring_tool(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("permanent analysis error")
+
+    service = VideoMonitoringService(monitoring_tool=monitoring_tool, cv2_module=FakeCv2(capture))
+    session = service.monitor("milo", str(video), sample_interval_seconds=1.0, max_samples=5)
+
+    assert calls == 5
+    assert session.attempted_samples == 5
+    assert len(session.samples) == 0
+    assert len(session.failures) == 5
+    assert session.ended_reason == "max_samples_reached"
+
+
+def test_quota_error_with_substantial_server_delay_stops_without_retry(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    calls = 0
+    sleeps = []
+
+    def monitoring_tool(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise TransientGeminiError("429 RESOURCE_EXHAUSTED", retry_after_seconds=60)
+
+    service = VideoMonitoringService(
+        monitoring_tool=monitoring_tool,
+        cv2_module=FakeCv2(FakeCapture([object()], [0])),
+        sleep_fn=sleeps.append,
+    )
+    session = service.monitor("milo", str(video), max_samples=5)
+
+    assert calls == 1
+    assert session.attempted_samples == 1
+    assert session.ended_reason == "quota_exhausted"
+    assert sleeps == []
+
+
+def test_quota_error_retries_once_after_server_retry_delay(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    calls = 0
+    sleeps = []
+
+    def monitoring_tool(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TransientGeminiError("429 RESOURCE_EXHAUSTED", retry_after_seconds=0.75)
+        return {"decision": {"alert_status": False}}
+
+    service = VideoMonitoringService(
+        monitoring_tool=monitoring_tool,
+        cv2_module=FakeCv2(FakeCapture([object()], [0])),
+        sleep_fn=sleeps.append,
+    )
+    session = service.monitor("milo", str(video), max_samples=1)
+
+    assert calls == 2
+    assert session.attempted_samples == 1
+    assert len(session.samples) == 1
+    assert session.ended_reason == "max_samples_reached"
+    assert sleeps == [0.75]
+
+
+def test_service_unavailable_retries_with_bounded_exponential_backoff(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    calls = 0
+    sleeps = []
+
+    def monitoring_tool(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise TransientGeminiError("503 UNAVAILABLE")
+
+    service = VideoMonitoringService(
+        monitoring_tool=monitoring_tool,
+        cv2_module=FakeCv2(FakeCapture([object()], [0])),
+        sleep_fn=sleeps.append,
+    )
+    session = service.monitor(
+        "milo",
+        str(video),
+        max_transient_retries=2,
+        base_retry_delay_seconds=0.25,
+    )
+
+    assert calls == 3
+    assert session.attempted_samples == 1
+    assert session.ended_reason == "service_unavailable"
+    assert sleeps == [0.25, 0.5]
+
+
+def test_server_retry_delay_is_used_and_prior_success_is_preserved(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    capture = FakeCapture([object(), object()], [0, 1000])
+    calls = 0
+    sleeps = []
+    persisted_results = []
+
+    def monitoring_tool(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            result = {"observation": {"observation_id": "already-stored"}}
+            persisted_results.append(result)
+            return result
+        raise TransientGeminiError("429 RESOURCE_EXHAUSTED", retry_after_seconds=60)
+
+    service = VideoMonitoringService(
+        monitoring_tool=monitoring_tool,
+        cv2_module=FakeCv2(capture),
+        sleep_fn=sleeps.append,
+    )
+    session = service.monitor("milo", str(video), sample_interval_seconds=1.0, max_samples=5)
+
+    assert session.attempted_samples == 2
+    assert session.ended_reason == "quota_exhausted"
+    assert len(session.samples) == 1
+    assert session.samples[0].monitoring_result == persisted_results[0]
+    assert sleeps == []

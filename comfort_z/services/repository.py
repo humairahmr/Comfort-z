@@ -43,29 +43,78 @@ class LocalJsonObservationRepository(ObservationRepository):
         matches = [item for item in self._all() if item.animal_id == animal_id]
         return sorted(matches, key=lambda item: item.timestamp, reverse=True)[:limit]
 
-class FirestoreObservationRepository(ObservationRepository):
-    def __init__(self, project: str, collection: str = "animal_observations") -> None:
-        from google.cloud import firestore
+class ObservationRepositoryError(RuntimeError):
+    """A storage failure with enough context for an agent or owner to act on it."""
 
-        self._firestore = firestore
-        self.collection = firestore.Client(project=project).collection(collection)
+
+class FirestoreObservationRepository(ObservationRepository):
+    """Firestore history at animals/{animal_id}/observations/{observation_id}."""
+
+    def __init__(
+        self,
+        project: str,
+        observations_collection: str = "observations",
+        client: object | None = None,
+    ) -> None:
+        try:
+            from google.cloud import firestore
+
+            self._firestore = firestore
+            self.client = client or firestore.Client(project=project)
+            self.animals = self.client.collection("animals")
+            self.observations_collection = observations_collection
+        except Exception as error:
+            raise ObservationRepositoryError(
+                "Could not initialize Firestore. Check Application Default Credentials, "
+                "GOOGLE_CLOUD_PROJECT, and Firestore access."
+            ) from error
+
+    def _observations_for(self, animal_id: str):
+        return self.animals.document(animal_id).collection(self.observations_collection)
 
     def save(self, observation: StoredObservation) -> StoredObservation:
-        self.collection.document(observation.observation_id).set(observation.model_dump(mode="json"))
+        animal_document = self.animals.document(observation.animal_id)
+        animal_metadata = {
+            "animal_id": observation.animal_id,
+            "animal_name": observation.animal_name,
+            "expected_species": observation.expected_species,
+        }
+        try:
+            animal_document.set(animal_metadata, merge=True)
+            self._observations_for(observation.animal_id).document(
+                observation.observation_id
+            ).set(observation.model_dump(mode="json"))
+        except Exception as error:
+            raise ObservationRepositoryError(
+                f"Could not save observation {observation.observation_id} to Firestore for "
+                f"animal {observation.animal_id}. Check network and Firestore permissions."
+            ) from error
         return observation
 
     def recent_for_animal(self, animal_id: str, limit: int = 5) -> list[StoredObservation]:
-        query = (
-            self.collection.where("animal_id", "==", animal_id)
-            .order_by("timestamp", direction=self._firestore.Query.DESCENDING)
-            .limit(limit)
-        )
-        return [StoredObservation.model_validate(doc.to_dict()) for doc in query.stream()]
+        try:
+            query = (
+                self._observations_for(animal_id)
+                .order_by("timestamp", direction=self._firestore.Query.DESCENDING)
+                .limit(limit)
+            )
+            return [StoredObservation.model_validate(doc.to_dict()) for doc in query.stream()]
+        except Exception as error:
+            raise ObservationRepositoryError(
+                f"Could not retrieve Firestore history for animal {animal_id}. "
+                "Check network and Firestore permissions."
+            ) from error
 
 def get_repository() -> ObservationRepository:
     if os.getenv("OBSERVATION_STORE", "local").lower() == "firestore":
         project = os.getenv("GOOGLE_CLOUD_PROJECT")
         if not project:
-            raise RuntimeError("GOOGLE_CLOUD_PROJECT is required when OBSERVATION_STORE=firestore.")
-        return FirestoreObservationRepository(project, os.getenv("FIRESTORE_COLLECTION", "animal_observations"))
+            raise ObservationRepositoryError(
+                "GOOGLE_CLOUD_PROJECT is required when OBSERVATION_STORE=firestore."
+            )
+        observations_collection = os.getenv(
+            "FIRESTORE_OBSERVATIONS_COLLECTION",
+            os.getenv("FIRESTORE_COLLECTION", "observations"),
+        )
+        return FirestoreObservationRepository(project, observations_collection)
     return LocalJsonObservationRepository(os.getenv("LOCAL_OBSERVATION_FILE", "data/observations.json"))
