@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from comfort_z.models import (
     DailyReportNarrative,
+    DirectEnvironmentReading,
+    EnvironmentContext,
     GeminiObservation,
     MonitoringProfile,
     MonitoringSourceType,
@@ -88,6 +90,28 @@ def test_research_decision_can_record_unresolved_uncertainty_for_a_recurring_pat
 
     assert decision.needed
     assert decision.trigger_type == "unresolved_uncertainty"
+
+
+def test_research_question_carries_observation_trend_and_environment_context():
+    current = make_observation(severity=Severity.CONCERNING).model_copy(
+        update={
+            "environment_context": EnvironmentContext(
+                provider="test",
+                outdoor_temperature_c=31,
+                observed_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+            ),
+            "direct_environment_readings": [
+                DirectEnvironmentReading(reading_type="water_temperature", value=25, unit="C")
+            ],
+        }
+    )
+
+    decision = decide_research(current, [], trend=Trend.WORSENING, alert_status=False)
+
+    assert "worsening" in decision.research_question
+    assert "posture: resting" in decision.research_question
+    assert "Outdoor context only" in decision.research_question
+    assert "water_temperature 25.0 C" in decision.research_question
 
 
 def test_research_evaluation_prefers_authoritative_evidence_and_labels_disagreement():
