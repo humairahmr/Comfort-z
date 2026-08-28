@@ -48,6 +48,7 @@ class VideoMonitoringService:
         base_retry_delay_seconds: float = 1.0,
         stop_retry_delay_seconds: float = 30.0,
         start_at_seconds: float = 0.0,
+        source_label: str | None = None,
     ) -> VideoMonitoringSession:
         """Run a resilient sampled monitoring session.
 
@@ -70,7 +71,7 @@ class VideoMonitoringService:
 
         self._stop_event.clear()
         is_webcam = isinstance(source, int)
-        source_label = f"webcam:{source}" if is_webcam else str(Path(source))
+        source_label = source_label or (f"webcam:{source}" if is_webcam else str(Path(source)))
         failures: list[str] = []
         samples: list[VideoFrameSample] = []
         attempted_samples = 0

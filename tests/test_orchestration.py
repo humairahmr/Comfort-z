@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 
 from comfort_z.models import (
@@ -18,6 +19,7 @@ from comfort_z.services.orchestration import (
     monitor_next_window,
 )
 from comfort_z.services.repository import LocalJsonMonitoringStateRepository
+from comfort_z.services.source import ResolvedVideoSource
 
 
 def profile(**updates):
@@ -117,6 +119,31 @@ def test_next_window_resumes_from_persisted_cursor_and_is_bounded(tmp_path):
     assert first.source_cursor_seconds == 10.001
     assert second.source_cursor_seconds == 20.001
     assert second.samples_used_in_current_period == 4
+
+
+def test_gcs_profile_uses_temporary_input_but_preserves_original_source_reference(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    source_reference = "gs://animal-media/videos/today.mp4"
+    repository.save_profile(profile(source_reference=source_reference))
+    local_download = tmp_path / "download.mp4"
+    local_download.write_bytes(b"video")
+    video = RecordingVideoService([session(attempts=1, last=5)])
+
+    @contextmanager
+    def resolver(source):
+        assert source == source_reference
+        yield ResolvedVideoSource(str(local_download), source_reference)
+
+    monitor_next_window(
+        "raku",
+        state_repository=repository,
+        video_service=video,
+        source_resolver=resolver,
+    )
+
+    assert video.calls[0]["source"] == str(local_download)
+    assert video.calls[0]["source_label"] == source_reference
+    assert repository.get_profile("raku").source_reference == source_reference
 
 
 def test_daily_budget_limits_next_window_attempts_and_prevents_extra_run(tmp_path):

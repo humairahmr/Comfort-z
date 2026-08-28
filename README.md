@@ -92,6 +92,10 @@ When `expected_species` is supplied, Gemini decides whether that expected animal
 
 Comfort-z can save a persistent goal such as **“Keep an eye on Raku”** without opening an endless process. A profile stores the video source, normal/elevated sample intervals, daily sample budget, cursor, active state, and report schedule. Each `next-window` invocation is intentionally finite: it reads the saved cursor, analyzes at most its small requested sample count (and never more than the remaining daily budget), writes observations through the existing workflow, and saves the next cursor. Calling it again resumes after the prior attempted video timestamp instead of restarting at zero.
 
+For a private Cloud Storage video, set a video profile's `source_reference` to a generic object URI such as `gs://YOUR_BUCKET/path/to/video.mp4`. Each bounded window uses Application Default Credentials (the Cloud Run runtime service account in Cloud Run) to download that object directly to a temporary file, passes only that file to OpenCV, then deletes it when the window completes or fails. The saved profile and observation provenance retain the original `gs://` URI, never the temporary path. Local paths and integer webcam sources continue to bypass Cloud Storage entirely. No signed URL, public bucket access, credential file, or new environment variable is required.
+
+Grant the runtime service account the bucket-scoped Storage Object Viewer role (`roles/storage.objectViewer`), or a custom role containing `storage.objects.get`, on each private media bucket it must read. The service does not list, upload, or modify media objects.
+
 For local development, monitoring profiles and reports are stored in `data/monitoring_state.json`; set `LOCAL_MONITORING_STATE_FILE` to use another ignored path. With `OBSERVATION_STORE=firestore`, profiles use `animals/{animal_id}/monitoring/profile` and reports use `animals/{animal_id}/reports/{report_id}`. No credentials are stored in either repository.
 
 Create a Raku video profile through the API:

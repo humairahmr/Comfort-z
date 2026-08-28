@@ -143,6 +143,27 @@ def test_video_monitoring_can_start_from_a_persisted_video_cursor(tmp_path):
     assert capture.seek_calls == [(FakeCv2.CAP_PROP_POS_MSEC, 5000)]
 
 
+def test_video_source_label_preserves_original_gcs_provenance(tmp_path):
+    video = tmp_path / "download.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    capture = FakeCapture([object()], [0])
+    calls = []
+    service = VideoMonitoringService(
+        monitoring_tool=lambda **kwargs: calls.append(kwargs) or {"decision": {}},
+        cv2_module=FakeCv2(capture),
+    )
+
+    session = service.monitor(
+        "milo",
+        str(video),
+        source_label="gs://animal-media/videos/today.mp4",
+        max_samples=1,
+    )
+
+    assert session.samples[0].source == "gs://animal-media/videos/today.mp4"
+    assert "source=gs://animal-media/videos/today.mp4" in calls[0]["source_info"]
+
+
 def test_max_samples_bounds_attempts_even_when_every_frame_fails(tmp_path):
     video = tmp_path / "animal.mp4"
     video.write_bytes(b"not-read-by-fake-capture")

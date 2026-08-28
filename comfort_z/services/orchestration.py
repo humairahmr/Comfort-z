@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import datetime, time, timedelta, timezone
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from comfort_z.services.repository import (
     get_monitoring_state_repository,
     get_repository,
 )
+from comfort_z.services.source import ResolvedVideoSource, resolve_video_source
 from comfort_z.services.video import VideoMonitoringService
 
 DEFAULT_WINDOW_MAX_SAMPLES = 2
@@ -59,6 +61,7 @@ def monitor_next_window(
     window_max_samples: int = DEFAULT_WINDOW_MAX_SAMPLES,
     state_repository: MonitoringStateRepository | None = None,
     video_service: VideoMonitoringService | None = None,
+    source_resolver: Callable[[str | int], AbstractContextManager[ResolvedVideoSource]] = resolve_video_source,
     now: datetime | None = None,
 ) -> MonitoringWindowResult:
     """Process one finite source window and save its resume cursor and quota state."""
@@ -87,15 +90,17 @@ def monitor_next_window(
         else profile.normal_sampling_interval_seconds
     )
     service = video_service or VideoMonitoringService()
-    session = service.monitor(
-        animal_id=profile.animal_id,
-        source=profile.source_reference,
-        sample_interval_seconds=interval,
-        max_samples=min(window_max_samples, remaining),
-        animal_name=profile.animal_name,
-        expected_species=profile.expected_species,
-        start_at_seconds=profile.source_cursor_seconds,
-    )
+    with source_resolver(profile.source_reference) as resolved_source:
+        session = service.monitor(
+            animal_id=profile.animal_id,
+            source=resolved_source.local_source,
+            source_label=resolved_source.source_label,
+            sample_interval_seconds=interval,
+            max_samples=min(window_max_samples, remaining),
+            animal_name=profile.animal_name,
+            expected_species=profile.expected_species,
+            start_at_seconds=profile.source_cursor_seconds,
+        )
 
     cursor = profile.source_cursor_seconds
     if session.last_attempt_source_timestamp_seconds is not None:
