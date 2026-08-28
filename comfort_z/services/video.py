@@ -47,6 +47,7 @@ class VideoMonitoringService:
         max_transient_retries: int = 1,
         base_retry_delay_seconds: float = 1.0,
         stop_retry_delay_seconds: float = 30.0,
+        start_at_seconds: float = 0.0,
     ) -> VideoMonitoringSession:
         """Run a resilient sampled monitoring session.
 
@@ -64,6 +65,8 @@ class VideoMonitoringService:
             raise ValueError("max_transient_retries cannot be negative.")
         if base_retry_delay_seconds <= 0 or stop_retry_delay_seconds <= 0:
             raise ValueError("Retry delays must be greater than zero.")
+        if start_at_seconds < 0:
+            raise ValueError("start_at_seconds cannot be negative.")
 
         self._stop_event.clear()
         is_webcam = isinstance(source, int)
@@ -71,6 +74,7 @@ class VideoMonitoringService:
         failures: list[str] = []
         samples: list[VideoFrameSample] = []
         attempted_samples = 0
+        last_attempt_source_timestamp_seconds: float | None = None
         ended_reason = "completed"
 
         if not is_webcam and not Path(source).is_file():
@@ -95,6 +99,21 @@ class VideoMonitoringService:
                 failures=[f"Could not open {source_label}."],
                 ended_reason="source_unavailable",
             )
+
+        if not is_webcam and start_at_seconds:
+            try:
+                capture.set(self._cv2.CAP_PROP_POS_MSEC, start_at_seconds * 1000)
+            except Exception as error:
+                capture.release()
+                return VideoMonitoringSession(
+                    animal_id=animal_id,
+                    animal_name=animal_name,
+                    expected_species=expected_species,
+                    source=source_label,
+                    attempted_samples=0,
+                    failures=[f"Could not seek {source_label}: {error}"],
+                    ended_reason="source_seek_error",
+                )
 
         frame_index = 0
         last_sample_at: float | None = None
@@ -129,6 +148,7 @@ class VideoMonitoringService:
                         ended_reason = "max_samples_reached"
                         break
                     attempted_samples += 1
+                    last_attempt_source_timestamp_seconds = source_seconds
 
                     frame_path = Path(frame_directory) / f"frame_{frame_index:06d}.jpg"
                     if not self._cv2.imwrite(str(frame_path), frame):
@@ -187,6 +207,7 @@ class VideoMonitoringService:
             samples=samples,
             failures=failures,
             ended_reason=ended_reason,
+            last_attempt_source_timestamp_seconds=last_attempt_source_timestamp_seconds,
         )
 
     def _source_time_seconds(self, capture: Any, is_webcam: bool) -> float | None:

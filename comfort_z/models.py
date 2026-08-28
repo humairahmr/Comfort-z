@@ -1,6 +1,6 @@
 """Schemas shared by Gemini, storage, and alert logic."""
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
@@ -24,6 +24,16 @@ class ObservationStatus(str, Enum):
     VALID = "valid"
     ANIMAL_NOT_VISIBLE = "animal_not_visible"
     UNCERTAIN = "uncertain"
+
+
+class MonitoringSourceType(str, Enum):
+    VIDEO = "video"
+    WEBCAM = "webcam"
+
+
+class SamplingMode(str, Enum):
+    NORMAL = "normal"
+    ELEVATED = "elevated"
 
 class GeminiObservation(BaseModel):
     species: str | None = Field(default=None, description="Species only if reasonably identifiable.")
@@ -50,6 +60,10 @@ class StoredObservation(BaseModel):
     severity: Severity
     explanation: str
     source_info: str | None = None
+    # Persist the existing policy outcome so period reports can describe alerts
+    # without re-running comparison logic against historical records.
+    alert_status: bool = False
+    trend: Trend | None = None
 
 class MonitoringDecision(BaseModel):
     alert_status: bool
@@ -86,3 +100,68 @@ class VideoMonitoringSession(BaseModel):
     samples: list[VideoFrameSample] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     ended_reason: str
+    last_attempt_source_timestamp_seconds: float | None = None
+
+
+class MonitoringProfile(BaseModel):
+    """Persisted, quota-conscious instructions for one animal source."""
+
+    animal_id: str = Field(min_length=1)
+    animal_name: str | None = None
+    expected_species: str | None = None
+    monitoring_goal: str = Field(min_length=1)
+    source_reference: str | int
+    source_type: MonitoringSourceType
+    normal_sampling_interval_seconds: float = Field(gt=0)
+    elevated_sampling_interval_seconds: float = Field(gt=0)
+    current_sampling_mode: SamplingMode = SamplingMode.NORMAL
+    daily_sample_budget: int = Field(gt=0)
+    samples_used_in_current_period: int = Field(default=0, ge=0)
+    budget_period_date: date = Field(default_factory=lambda: datetime.now(timezone.utc).date())
+    source_cursor_seconds: float = Field(default=0, ge=0)
+    active: bool = True
+    report_time: str = "08:00"
+    timezone: str = "UTC"
+    last_monitoring_run: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DailyReportNarrative(BaseModel):
+    """Gemini's bounded text summary of already-structured observations."""
+
+    overall_activity_behavior: str
+    notable_changes: list[str] = Field(default_factory=list)
+    concerning_observations: list[str] = Field(default_factory=list)
+    visibility_data_quality_limitations: str
+    comparison_with_prior_observations: str
+    recommended_action: str
+
+
+class DailyMonitoringReport(BaseModel):
+    report_id: str = Field(default_factory=lambda: str(uuid4()))
+    animal_id: str
+    animal_name: str | None = None
+    expected_species: str | None = None
+    period_start: datetime
+    period_end: datetime
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    valid_observation_count: int = Field(ge=0)
+    animal_not_visible_count: int = Field(ge=0)
+    uncertain_observation_count: int = Field(ge=0)
+    concerning_observation_ids: list[str] = Field(default_factory=list)
+    alert_observation_ids: list[str] = Field(default_factory=list)
+    narrative: DailyReportNarrative
+
+
+class MonitoringWindowResult(BaseModel):
+    """One finite monitoring invocation; never a permanently running camera loop."""
+
+    animal_id: str
+    active: bool
+    sampling_mode: SamplingMode
+    source_cursor_seconds: float = Field(ge=0)
+    samples_used_in_current_period: int = Field(ge=0)
+    remaining_daily_sample_budget: int = Field(ge=0)
+    ended_reason: str
+    session: VideoMonitoringSession | None = None

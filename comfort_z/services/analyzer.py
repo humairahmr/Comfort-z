@@ -6,11 +6,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from comfort_z.models import GeminiObservation
+from comfort_z.models import DailyReportNarrative, GeminiObservation
 
 _PROMPT = """You are Comfort-z's visual observation component. Analyze only what is visibly supported by the supplied animal image or short visual input. Return the requested structured observation. Do not diagnose disease or claim certainty. Use wording such as 'potentially concerning', 'visible abnormality', 'consider monitoring', or 'seek professional veterinary advice'. A single uncertain visual observation should usually have severity 'monitor', not 'potentially_concerning'. Set severity using visible evidence only.
 
 Always set animal_visible and observation_status. If the monitored animal is not sufficiently visible, set animal_visible to false and observation_status to animal_not_visible or uncertain. In that case, set species to null, do not infer behaviour from another animal or object, and set severity to monitor rather than normal. These records are provenance only and do not establish that the monitored animal is normal."""
+
+_REPORT_PROMPT = """You are Comfort-z's daily animal-monitoring reporting component. Summarize only the supplied structured observation records; no images are being supplied. Be evidence-based and non-diagnostic. Clearly distinguish valid observations from frames where the monitored animal was not visible or was uncertain. Do not claim that missing visibility means normal behaviour. Describe potentially concerning records and saved alert decisions, meaningful change relative to prior valid records when supplied, and a practical next action."""
 
 load_dotenv()
 
@@ -57,3 +59,31 @@ class GeminiVisualAnalyzer:
         if not response.text:
             raise RuntimeError("Gemini returned no structured observation.")
         return GeminiObservation.model_validate_json(response.text)
+
+
+class GeminiDailyReportGenerator:
+    """Use the configured Comfort-z Gemini model to summarize stored, structured history."""
+
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key and os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() != "true":
+            raise RuntimeError(
+                "Set GEMINI_API_KEY or GOOGLE_API_KEY, or set "
+                "GOOGLE_GENAI_USE_VERTEXAI=true with Google Cloud credentials."
+            )
+        self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
+
+    def generate(self, structured_history: dict) -> DailyReportNarrative:
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[_REPORT_PROMPT, structured_history],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=DailyReportNarrative,
+                temperature=0.1,
+            ),
+        )
+        if not response.text:
+            raise RuntimeError("Gemini returned no structured daily report.")
+        return DailyReportNarrative.model_validate_json(response.text)

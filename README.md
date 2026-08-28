@@ -37,9 +37,9 @@ The runtime does not use OpenAI APIs or models.
 ```text
 comfort_z/
   agent.py                 # ADK agent named comfort_z
-  models.py                # Observation / decision schemas
-  services/                # Gemini, repositories, comparison policy
-  tools/monitoring.py      # Agent-callable workflow tools
+  models.py                # Observation, profile, decision, and report schemas
+  services/                # Gemini, repositories, comparison, video, orchestration
+  tools/monitoring.py      # Agent-callable monitoring workflow tools
 tests/                      # Storage and policy tests
 ```
 
@@ -88,6 +88,35 @@ python -c "from comfort_z.services.video import VideoMonitoringService; result =
 
 When `expected_species` is supplied, Gemini decides whether that expected animal is sufficiently visible instead of freely identifying another creature. Frames marked `animal_not_visible` or `uncertain` are stored for provenance but excluded from behavioural trends and alert persistence.
 
+## Bounded continuous monitoring demo
+
+Comfort-z can save a persistent goal such as **“Keep an eye on Raku”** without opening an endless process. A profile stores the video source, normal/elevated sample intervals, daily sample budget, cursor, active state, and report schedule. Each `next-window` invocation is intentionally finite: it reads the saved cursor, analyzes at most its small requested sample count (and never more than the remaining daily budget), writes observations through the existing workflow, and saves the next cursor. Calling it again resumes after the prior attempted video timestamp instead of restarting at zero.
+
+For local development, monitoring profiles and reports are stored in `data/monitoring_state.json`; set `LOCAL_MONITORING_STATE_FILE` to use another ignored path. With `OBSERVATION_STORE=firestore`, profiles use `animals/{animal_id}/monitoring/profile` and reports use `animals/{animal_id}/reports/{report_id}`. No credentials are stored in either repository.
+
+Create a Raku video profile through the API:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/profiles -ContentType 'application/json' -Body '{"animal_id":"raku","animal_name":"Raku","expected_species":"Betta splendens","monitoring_goal":"Keep an eye on Raku.","source_reference":"C:\\demo\\Raku.mp4","source_type":"video","normal_sampling_interval_seconds":5,"elevated_sampling_interval_seconds":1,"daily_sample_budget":24,"report_time":"08:00","timezone":"Asia/Kuala_Lumpur"}'
+```
+
+Process the next two selected frames only:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/raku/next-window -ContentType 'application/json' -Body '{"window_max_samples":2}'
+```
+
+The first valid non-normal observation changes the saved profile to elevated sampling for a later invocation. Non-visible or uncertain frames never change the behavioural trend or sampling mode. Existing Gemini 429/503 bounds still apply inside each window. An inactive profile and an exhausted daily budget return a normal bounded result without opening the source.
+
+Generate a daily report after the configured monitoring period:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/raku/daily-report
+Invoke-RestMethod -Uri http://127.0.0.1:8080/animals/raku/reports?limit=5
+```
+
+The report sends Gemini only structured saved observations, never the historical images or video frames. It separates valid behavioural evidence from `animal_not_visible` and `uncertain` counts, includes saved alert decisions, and persists the resulting report. A future Cloud Scheduler configuration can call the already-bounded `POST /monitoring/{animal_id}/next-window` and daily-report endpoints; this repository does not configure a scheduler.
+
 ## Storage and alerts
 
 Default storage is `data/observations.json`. Firestore is used only when `OBSERVATION_STORE=firestore` and `GOOGLE_CLOUD_PROJECT` are set. It uses Application Default Credentials and stores records at `animals/{animal_id}/observations/{observation_id}`: the parent stores stable animal metadata and every observation document retains the existing structured observation payload. `FIRESTORE_OBSERVATIONS_COLLECTION` defaults to `observations`; leave `OBSERVATION_STORE=local` for the validated local fallback. The policy is intentionally simple: a first uncertain/concerning observation is saved for follow-up, while a visible worsening or at least two concerning results among the newest three observations creates an alert. It never makes medical diagnoses.
@@ -112,6 +141,11 @@ The container starts the minimal HTTP API with Uvicorn at `0.0.0.0:$PORT`. It pr
 - `GET /health` — process health, selected store, ADK agent, and model; no external request.
 - `POST /monitor` — calls the existing `monitor_animal` ADK tool with `animal_id`, `image_path`, and optional animal metadata.
 - `GET /animals/{animal_id}/observations?limit=5` — calls the existing repository-backed history tool.
+- `POST /monitoring/profiles` — saves an active/inactive bounded monitoring profile.
+- `GET /monitoring/{animal_id}/profile` — retrieves a saved profile.
+- `POST /monitoring/{animal_id}/next-window` — processes one finite source window.
+- `POST /monitoring/{animal_id}/daily-report` — generates one persisted daily report from structured history.
+- `GET /animals/{animal_id}/reports?limit=5` — retrieves persisted reports.
 
 Before deploying, create a Firestore Native database, enable Cloud Run, Cloud Build, Artifact Registry, Firestore, and Secret Manager APIs, then create a dedicated Cloud Run service account. Grant it `roles/datastore.user` for Firestore and `roles/secretmanager.secretAccessor` for the Gemini API-key secret. Cloud Run uses this service account as Application Default Credentials for Firestore; do not upload service-account JSON files.
 

@@ -2,10 +2,18 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comfort_z.models import GeminiObservation, ObservationStatus, Severity, StoredObservation
+from comfort_z.models import (
+    GeminiObservation,
+    MonitoringProfile,
+    MonitoringSourceType,
+    ObservationStatus,
+    Severity,
+    StoredObservation,
+)
 from comfort_z.services import repository as repository_module
 from comfort_z.services.repository import (
     FirestoreObservationRepository,
+    FirestoreMonitoringStateRepository,
     LocalJsonObservationRepository,
     ObservationRepositoryError,
     get_repository,
@@ -15,6 +23,7 @@ from comfort_z.services.repository import (
 class FakeSnapshot:
     def __init__(self, data):
         self._data = data
+        self.exists = data is not None
 
     def to_dict(self):
         return self._data
@@ -32,6 +41,9 @@ class FakeDocument:
     def set(self, data, merge=False):
         self.merge_values.append(merge)
         self.data = {**(self.data or {}), **data} if merge else data
+
+    def get(self):
+        return FakeSnapshot(self.data)
 
 
 class FakeCollection:
@@ -132,6 +144,32 @@ def test_firestore_save_error_is_actionable():
 
     with pytest.raises(ObservationRepositoryError, match="Could not save observation"):
         repository.save(make_observation(datetime.now(timezone.utc)))
+
+
+def test_firestore_monitoring_profile_uses_animal_monitoring_subcollection():
+    client = FakeFirestoreClient()
+    repository = FirestoreMonitoringStateRepository("comfort-z-test", client=client)
+    profile = MonitoringProfile(
+        animal_id="raku",
+        animal_name="Raku",
+        expected_species="Betta splendens",
+        monitoring_goal="Keep an eye on Raku.",
+        source_reference="Raku.mp4",
+        source_type=MonitoringSourceType.VIDEO,
+        normal_sampling_interval_seconds=5,
+        elevated_sampling_interval_seconds=1,
+        daily_sample_budget=10,
+    )
+
+    repository.save_profile(profile)
+    loaded = repository.get_profile("raku")
+
+    stored = client.collections["animals"].documents["raku"].subcollections["monitoring"].documents[
+        "profile"
+    ].data
+    assert stored["monitoring_goal"] == "Keep an eye on Raku."
+    assert loaded is not None
+    assert loaded.source_reference == "Raku.mp4"
 
 
 def test_repository_selection_defaults_to_local_and_firestore_is_explicit(monkeypatch, tmp_path):

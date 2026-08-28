@@ -65,3 +65,59 @@ def test_monitor_endpoint_returns_non_sensitive_storage_error(monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Observation storage is unavailable."
+
+
+def test_monitoring_profile_and_bounded_window_endpoints_delegate_to_tools(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "create_monitoring_profile",
+        lambda **kwargs: {"animal_id": kwargs["animal_id"], "active": True},
+    )
+    monkeypatch.setattr(
+        api,
+        "monitor_next_window",
+        lambda animal_id, window_max_samples: {
+            "animal_id": animal_id,
+            "ended_reason": "max_samples_reached",
+            "window_max_samples": window_max_samples,
+        },
+    )
+    client = TestClient(api.app)
+
+    profile = client.post(
+        "/monitoring/profiles",
+        json={
+            "animal_id": "raku",
+            "monitoring_goal": "Keep an eye on Raku.",
+            "source_reference": "Raku.mp4",
+            "source_type": "video",
+        },
+    )
+    window = client.post("/monitoring/raku/next-window", json={"window_max_samples": 2})
+
+    assert profile.status_code == 200
+    assert profile.json() == {"animal_id": "raku", "active": True}
+    assert window.status_code == 200
+    assert window.json()["window_max_samples"] == 2
+
+
+def test_daily_report_endpoints_delegate_to_existing_orchestration_tools(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "generate_daily_report",
+        lambda animal_id: {"animal_id": animal_id, "report_id": "report-1"},
+    )
+    monkeypatch.setattr(
+        api,
+        "get_recent_daily_reports",
+        lambda animal_id, limit: [{"animal_id": animal_id, "limit": limit}],
+    )
+    client = TestClient(api.app)
+
+    generated = client.post("/monitoring/raku/daily-report")
+    history = client.get("/animals/raku/reports?limit=3")
+
+    assert generated.status_code == 200
+    assert generated.json()["report_id"] == "report-1"
+    assert history.status_code == 200
+    assert history.json() == [{"animal_id": "raku", "limit": 3}]

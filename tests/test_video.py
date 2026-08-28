@@ -10,6 +10,7 @@ class FakeCapture:
         self.current_timestamp = 0.0
         self.opened = opened
         self.released = False
+        self.seek_calls = []
 
     def isOpened(self):
         return self.opened
@@ -24,6 +25,10 @@ class FakeCapture:
 
     def get(self, _property):
         return self.current_timestamp
+
+    def set(self, property_id, value):
+        self.seek_calls.append((property_id, value))
+        return True
 
     def release(self):
         self.released = True
@@ -122,6 +127,20 @@ def test_stop_ends_a_session_normally(tmp_path):
     assert len(session.samples) == 1
     assert session.ended_reason == "stopped"
     assert capture.released
+
+
+def test_video_monitoring_can_start_from_a_persisted_video_cursor(tmp_path):
+    video = tmp_path / "animal.mp4"
+    video.write_bytes(b"not-read-by-fake-capture")
+    capture = FakeCapture([object()], [5000])
+    service = VideoMonitoringService(
+        monitoring_tool=lambda **_kwargs: {"decision": {"alert_status": False}},
+        cv2_module=FakeCv2(capture),
+    )
+
+    service.monitor("milo", str(video), max_samples=1, start_at_seconds=5)
+
+    assert capture.seek_calls == [(FakeCv2.CAP_PROP_POS_MSEC, 5000)]
 
 
 def test_max_samples_bounds_attempts_even_when_every_frame_fails(tmp_path):
