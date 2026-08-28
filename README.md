@@ -68,6 +68,26 @@ The final command should print `comfort_z` without calling Gemini. In ADK Web, s
 Monitor animal_id "milo" using image_path "C:\\demo\\milo_today.jpg". Save it and explain whether I should monitor or act.
 ```
 
+## Basic video monitoring
+
+OpenCV samples a local video or webcam at a deliberate interval; it does not send every frame to Gemini. Each sample is saved through the existing `monitor_animal` workflow, including a source/frame description in the observation record.
+
+Test a local video (five samples, one every five seconds of video time):
+
+```powershell
+python -c "from comfort_z.services.video import VideoMonitoringService; result = VideoMonitoringService().monitor('raku', r'C:\\demo\\raku.mp4', sample_interval_seconds=5, max_samples=5, animal_name='Raku', expected_species='Betta splendens'); print(result.model_dump_json(indent=2))"
+```
+
+Test webcam device 0 (five samples, one every five seconds of live time):
+
+```powershell
+python -c "from comfort_z.services.video import VideoMonitoringService; result = VideoMonitoringService().monitor('raku', 0, sample_interval_seconds=5, max_samples=5, animal_name='Raku', expected_species='Betta splendens'); print(result.model_dump_json(indent=2))"
+```
+
+`max_samples` provides a normal bounded stop. Code that runs a longer session can retain the service object and call `service.stop()`; an unavailable device, unreadable frame, encoding failure, or one Gemini failure is recorded in `failures` without crashing the session.
+
+When `expected_species` is supplied, Gemini decides whether that expected animal is sufficiently visible instead of freely identifying another creature. Frames marked `animal_not_visible` or `uncertain` are stored for provenance but excluded from behavioural trends and alert persistence.
+
 ## Storage and alerts
 
 Default storage is `data/observations.json`. Set `OBSERVATION_STORE=firestore` plus `GOOGLE_CLOUD_PROJECT` to use Firestore; ensure the credentials/service account can access it. The policy is intentionally simple: a first uncertain/concerning observation is saved for follow-up, while a visible worsening or at least two concerning results among the newest three observations creates an alert. It never makes medical diagnoses.

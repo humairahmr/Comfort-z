@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
-from comfort_z.models import GeminiObservation, Severity, StoredObservation
+from comfort_z.models import GeminiObservation, ObservationStatus, Severity, StoredObservation
 from comfort_z.services.repository import LocalJsonObservationRepository
 
 def make_observation(animal_id: str) -> StoredObservation:
-    visual = GeminiObservation(posture="standing", activity_level="moderate", apparent_movement="walking", confidence=0.8, behavioral_interpretation="The animal appears alert in this image.", uncertainty="Only one still image was provided.", severity=Severity.NORMAL)
+    visual = GeminiObservation(posture="standing", activity_level="moderate", apparent_movement="walking", confidence=0.8, behavioral_interpretation="The animal appears alert in this image.", uncertainty="Only one still image was provided.", severity=Severity.NORMAL, animal_visible=True, observation_status=ObservationStatus.VALID)
     return StoredObservation(animal_id=animal_id, timestamp=datetime.now(timezone.utc), gemini_observation=visual, severity=Severity.NORMAL, explanation=visual.behavioral_interpretation)
 
 def test_local_repository_stores_and_filters_history(tmp_path):
