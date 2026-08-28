@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
@@ -57,6 +58,7 @@ class VideoMonitoringService:
         environment_context: EnvironmentContext | None = None,
         direct_environment_readings: list[DirectEnvironmentReading] | None = None,
         enclosure_type: str | None = None,
+        start_frame_index: int = 0,
     ) -> VideoMonitoringSession:
         """Run a resilient sampled monitoring session.
 
@@ -76,6 +78,8 @@ class VideoMonitoringService:
             raise ValueError("Retry delays must be greater than zero.")
         if start_at_seconds < 0:
             raise ValueError("start_at_seconds cannot be negative.")
+        if start_frame_index < 0:
+            raise ValueError("start_frame_index cannot be negative.")
 
         self._stop_event.clear()
         is_webcam = isinstance(source, int)
@@ -84,6 +88,8 @@ class VideoMonitoringService:
         samples: list[VideoFrameSample] = []
         attempted_samples = 0
         last_attempt_source_timestamp_seconds: float | None = None
+        last_attempt_source_frame_index: int | None = None
+        next_source_cursor_seconds: float | None = None
         ended_reason = "completed"
 
         if not is_webcam and not Path(source).is_file():
@@ -109,7 +115,21 @@ class VideoMonitoringService:
                 ended_reason="source_unavailable",
             )
 
-        if not is_webcam and start_at_seconds:
+        if not is_webcam and start_frame_index:
+            try:
+                capture.set(self._cv2.CAP_PROP_POS_FRAMES, start_frame_index)
+            except Exception as error:
+                capture.release()
+                return VideoMonitoringSession(
+                    animal_id=animal_id,
+                    animal_name=animal_name,
+                    expected_species=expected_species,
+                    source=source_label,
+                    attempted_samples=0,
+                    failures=[f"Could not seek {source_label}: {error}"],
+                    ended_reason="source_seek_error",
+                )
+        elif not is_webcam and start_at_seconds:
             try:
                 capture.set(self._cv2.CAP_PROP_POS_MSEC, start_at_seconds * 1000)
             except Exception as error:
@@ -138,7 +158,11 @@ class VideoMonitoringService:
                     if not readable:
                         if frame_index == 0:
                             failures.append(f"No readable frames from {source_label}.")
-                            ended_reason = "unreadable_source"
+                            ended_reason = (
+                                "end_of_video"
+                                if not is_webcam and (start_frame_index or start_at_seconds)
+                                else "unreadable_source"
+                            )
                         elif is_webcam:
                             failures.append(f"Webcam stream ended at frame {frame_index}.")
                             ended_reason = "stream_ended"
@@ -146,6 +170,25 @@ class VideoMonitoringService:
 
                     frame_index += 1
                     source_seconds = self._source_time_seconds(capture, is_webcam)
+                    source_frame_index = self._source_frame_index(
+                        capture, is_webcam, frame_index, start_frame_index
+                    )
+                    if (
+                        not is_webcam
+                        and start_frame_index > 0
+                        and source_frame_index is not None
+                        and source_frame_index < start_frame_index
+                    ):
+                        # Some codecs seek to an earlier keyframe; decode forward to the cursor.
+                        continue
+                    if (
+                        not is_webcam
+                        and start_frame_index == 0
+                        and start_at_seconds > 0
+                        and source_seconds is not None
+                        and source_seconds <= start_at_seconds
+                    ):
+                        continue
                     sampling_time = source_seconds if source_seconds is not None else monotonic()
                     if (
                         last_sample_at is not None
@@ -158,6 +201,11 @@ class VideoMonitoringService:
                         break
                     attempted_samples += 1
                     last_attempt_source_timestamp_seconds = source_seconds
+                    last_attempt_source_frame_index = source_frame_index
+                    if source_seconds is not None:
+                        next_source_cursor_seconds = source_seconds + self._frame_step_seconds(
+                            capture
+                        )
 
                     frame_path = Path(frame_directory) / f"frame_{frame_index:06d}.jpg"
                     if not self._cv2.imwrite(str(frame_path), frame):
@@ -167,7 +215,9 @@ class VideoMonitoringService:
                             break
                         continue
 
-                    source_info = self._source_info(source_label, frame_index, source_seconds)
+                    source_info = self._source_info(
+                        source_label, frame_index, source_seconds, source_frame_index
+                    )
                     result, failure, transient_end_reason = self._monitor_frame_with_retries(
                         animal_id=animal_id,
                         image_path=str(frame_path),
@@ -197,6 +247,7 @@ class VideoMonitoringService:
                         VideoFrameSample(
                             source=source_label,
                             frame_index=frame_index,
+                            source_frame_index=source_frame_index,
                             source_timestamp_seconds=source_seconds,
                             monitoring_result=result,
                         )
@@ -220,6 +271,8 @@ class VideoMonitoringService:
             failures=failures,
             ended_reason=ended_reason,
             last_attempt_source_timestamp_seconds=last_attempt_source_timestamp_seconds,
+            last_attempt_source_frame_index=last_attempt_source_frame_index,
+            next_source_cursor_seconds=next_source_cursor_seconds,
         )
 
     def _source_time_seconds(self, capture: Any, is_webcam: bool) -> float | None:
@@ -228,10 +281,43 @@ class VideoMonitoringService:
         milliseconds = capture.get(self._cv2.CAP_PROP_POS_MSEC)
         return milliseconds / 1000 if milliseconds >= 0 else None
 
+    def _source_frame_index(
+        self,
+        capture: Any,
+        is_webcam: bool,
+        local_frame_index: int,
+        start_frame_index: int,
+    ) -> int | None:
+        if is_webcam:
+            return None
+        try:
+            position = capture.get(self._cv2.CAP_PROP_POS_FRAMES)
+            if isinstance(position, (int, float)) and math.isfinite(position) and position >= 1:
+                return int(position) - 1
+        except Exception:
+            pass
+        return start_frame_index + local_frame_index - 1
+
+    def _frame_step_seconds(self, capture: Any) -> float:
+        try:
+            fps = capture.get(self._cv2.CAP_PROP_FPS)
+            if isinstance(fps, (int, float)) and math.isfinite(fps) and fps > 0:
+                return 1 / fps
+        except Exception:
+            pass
+        # A sub-second fallback preserves forward timestamp progression for unusual files.
+        return 0.001
+
     @staticmethod
-    def _source_info(source: str, frame_index: int, seconds: float | None) -> str:
+    def _source_info(
+        source: str,
+        frame_index: int,
+        seconds: float | None,
+        source_frame_index: int | None,
+    ) -> str:
         position = "live" if seconds is None else f"{seconds:.2f}s"
-        return f"source={source}; frame={frame_index}; position={position}"
+        source_frame = "unknown" if source_frame_index is None else str(source_frame_index)
+        return f"source={source}; frame={frame_index}; source_frame={source_frame}; position={position}"
 
     def _monitor_frame_with_retries(
         self,

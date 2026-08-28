@@ -105,20 +105,34 @@ def monitor_next_window(
             environment_context=environment_context,
             direct_environment_readings=profile.direct_environment_readings,
             enclosure_type=profile.enclosure_type,
-            start_at_seconds=profile.source_cursor_seconds,
+            # Legacy profiles resume by timestamp once; new runs persist a deterministic frame cursor.
+            start_at_seconds=(
+                profile.source_cursor_seconds
+                if profile.source_cursor_frame_index is None
+                else 0.0
+            ),
+            start_frame_index=profile.source_cursor_frame_index or 0,
         )
 
     cursor = profile.source_cursor_seconds
-    if session.last_attempt_source_timestamp_seconds is not None:
-        # The tiny advance avoids sampling the same decoded video frame twice.
+    if session.next_source_cursor_seconds is not None:
+        cursor = max(cursor, session.next_source_cursor_seconds)
+    elif session.last_attempt_source_timestamp_seconds is not None:
         cursor = max(cursor, session.last_attempt_source_timestamp_seconds + 0.001)
+    next_frame_index = profile.source_cursor_frame_index
+    if profile.source_type.value == "video" and session.last_attempt_source_frame_index is not None:
+        next_frame_index = max(
+            profile.source_cursor_frame_index or 0,
+            session.last_attempt_source_frame_index + 1,
+        )
     active = profile.active
-    if profile.source_type.value == "video" and session.attempted_samples == 0 and session.ended_reason == "completed":
+    if profile.source_type.value == "video" and session.attempted_samples == 0 and session.ended_reason in {"completed", "end_of_video"}:
         active = False
 
     updated = profile.model_copy(
         update={
             "source_cursor_seconds": cursor,
+            "source_cursor_frame_index": next_frame_index,
             "samples_used_in_current_period": profile.samples_used_in_current_period
             + session.attempted_samples,
             "current_sampling_mode": _next_sampling_mode(profile, session),
@@ -259,6 +273,7 @@ def _window_result(
         active=profile.active,
         sampling_mode=profile.current_sampling_mode,
         source_cursor_seconds=profile.source_cursor_seconds,
+        source_cursor_frame_index=profile.source_cursor_frame_index,
         samples_used_in_current_period=profile.samples_used_in_current_period,
         remaining_daily_sample_budget=remaining,
         ended_reason=ended_reason,

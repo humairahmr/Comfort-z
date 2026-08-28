@@ -116,6 +116,7 @@ class VideoFrameSample(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source: str
     frame_index: int
+    source_frame_index: int | None = None
     source_timestamp_seconds: float | None = None
     monitoring_result: dict[str, Any]
 
@@ -132,6 +133,8 @@ class VideoMonitoringSession(BaseModel):
     failures: list[str] = Field(default_factory=list)
     ended_reason: str
     last_attempt_source_timestamp_seconds: float | None = None
+    last_attempt_source_frame_index: int | None = None
+    next_source_cursor_seconds: float | None = None
 
 
 class MonitoringProfile(BaseModel):
@@ -155,6 +158,8 @@ class MonitoringProfile(BaseModel):
     samples_used_in_current_period: int = Field(default=0, ge=0)
     budget_period_date: date = Field(default_factory=lambda: datetime.now(timezone.utc).date())
     source_cursor_seconds: float = Field(default=0, ge=0)
+    # The next prerecorded-video frame to read. None preserves legacy timestamp-only profiles.
+    source_cursor_frame_index: int | None = Field(default=None, ge=0)
     active: bool = True
     report_time: str = "08:00"
     timezone: str = "UTC"
@@ -197,6 +202,7 @@ class MonitoringWindowResult(BaseModel):
     active: bool
     sampling_mode: SamplingMode
     source_cursor_seconds: float = Field(ge=0)
+    source_cursor_frame_index: int | None = Field(default=None, ge=0)
     samples_used_in_current_period: int = Field(ge=0)
     remaining_daily_sample_budget: int = Field(ge=0)
     ended_reason: str
