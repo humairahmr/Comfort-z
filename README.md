@@ -25,7 +25,7 @@ This is deliberately not `prompt → Gemini → answer`: the tool operates on pe
 
 ## Technology
 
-- **Gemini** (`gemini-2.5-flash`): multimodal, structured visual observations.
+- **Gemini** (`gemini-3.5-flash`): multimodal, structured visual observations.
 - **Google ADK**: the `comfort_z` agent and tool orchestration.
 - **Firestore**: optional Cloud-ready observation history; local development defaults to JSON.
 - **Cloud Run**: deployment-ready Dockerfile.
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Set `GEMINI_API_KEY` in `.env` (never commit it), then run:
+Set either `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env` (never commit it), then run:
 
 ```powershell
 pytest -q
@@ -78,7 +78,7 @@ Create a project, enable Cloud Run and Firestore, authenticate, then deploy:
 
 ```powershell
 gcloud auth application-default login
-gcloud run deploy comfort-z --source . --region YOUR_REGION --project YOUR_PROJECT --set-env-vars OBSERVATION_STORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT,GEMINI_MODEL=gemini-2.5-flash
+gcloud run deploy comfort-z --source . --region YOUR_REGION --project YOUR_PROJECT --set-env-vars OBSERVATION_STORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT,GEMINI_MODEL=gemini-3.5-flash
 ```
 
 For Gemini Developer API, configure `GEMINI_API_KEY` with Cloud Run Secret Manager. For a Google Cloud production setup, prefer a Cloud Run service identity with Vertex AI and Firestore permissions and set `GOOGLE_GENAI_USE_VERTEXAI=true`.

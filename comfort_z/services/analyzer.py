@@ -14,10 +14,14 @@ load_dotenv()
 
 class GeminiVisualAnalyzer:
     def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        api_key = os.getenv("GEMINI_API_KEY")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        # The Google GenAI SDK supports either name for Gemini Developer API keys.
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key and os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() != "true":
-            raise RuntimeError("Set GEMINI_API_KEY, or set GOOGLE_GENAI_USE_VERTEXAI=true with Google Cloud credentials.")
+            raise RuntimeError(
+                "Set GEMINI_API_KEY or GOOGLE_API_KEY, or set "
+                "GOOGLE_GENAI_USE_VERTEXAI=true with Google Cloud credentials."
+            )
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
 
     def analyze_file(self, image_path: str) -> GeminiObservation:
