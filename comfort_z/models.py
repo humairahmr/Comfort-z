@@ -35,6 +35,34 @@ class SamplingMode(str, Enum):
     NORMAL = "normal"
     ELEVATED = "elevated"
 
+
+class DirectEnvironmentReading(BaseModel):
+    """An owner-supplied measurement, distinct from outdoor weather context."""
+
+    reading_type: str = Field(min_length=1)
+    value: float
+    unit: str = Field(min_length=1)
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    source: Literal["owner"] = "owner"
+
+
+class EnvironmentContext(BaseModel):
+    """Outdoor/local conditions that may support, but never replace, enclosure data."""
+
+    provider: str
+    location_name: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    context_type: Literal["observed", "forecast"] = "observed"
+    outdoor_temperature_c: float | None = None
+    outdoor_humidity_percent: float | None = Field(default=None, ge=0, le=100)
+    weather_condition: str | None = None
+    observed_at: datetime
+    context_note: str = (
+        "Outdoor/local weather context only; it is not a direct enclosure, room, water, "
+        "terrarium, or cage reading."
+    )
+
 class GeminiObservation(BaseModel):
     species: str | None = Field(default=None, description="Species only if reasonably identifiable.")
     # Legacy records lack these fields; treat them as uncertain rather than valid.
@@ -60,6 +88,9 @@ class StoredObservation(BaseModel):
     severity: Severity
     explanation: str
     source_info: str | None = None
+    environment_context: EnvironmentContext | None = None
+    direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
+    missing_direct_reading_requests: list[str] = Field(default_factory=list)
     # Persist the existing policy outcome so period reports can describe alerts
     # without re-running comparison logic against historical records.
     alert_status: bool = False
@@ -109,6 +140,11 @@ class MonitoringProfile(BaseModel):
     animal_id: str = Field(min_length=1)
     animal_name: str | None = None
     expected_species: str | None = None
+    location_name: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    enclosure_type: str | None = None
+    direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
     monitoring_goal: str = Field(min_length=1)
     source_reference: str | int
     source_type: MonitoringSourceType

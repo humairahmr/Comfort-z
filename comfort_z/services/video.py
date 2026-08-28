@@ -12,7 +12,12 @@ from typing import Any
 
 import cv2
 
-from comfort_z.models import VideoFrameSample, VideoMonitoringSession
+from comfort_z.models import (
+    DirectEnvironmentReading,
+    EnvironmentContext,
+    VideoFrameSample,
+    VideoMonitoringSession,
+)
 from comfort_z.tools.monitoring import monitor_animal
 
 MonitoringTool = Callable[..., dict[str, Any]]
@@ -49,6 +54,9 @@ class VideoMonitoringService:
         stop_retry_delay_seconds: float = 30.0,
         start_at_seconds: float = 0.0,
         source_label: str | None = None,
+        environment_context: EnvironmentContext | None = None,
+        direct_environment_readings: list[DirectEnvironmentReading] | None = None,
+        enclosure_type: str | None = None,
     ) -> VideoMonitoringSession:
         """Run a resilient sampled monitoring session.
 
@@ -170,6 +178,9 @@ class VideoMonitoringService:
                         max_transient_retries=max_transient_retries,
                         base_retry_delay_seconds=base_retry_delay_seconds,
                         stop_retry_delay_seconds=stop_retry_delay_seconds,
+                        environment_context=environment_context,
+                        direct_environment_readings=direct_environment_readings or [],
+                        enclosure_type=enclosure_type,
                     )
                     if failure:
                         failures.append(failure)
@@ -234,6 +245,9 @@ class VideoMonitoringService:
         max_transient_retries: int,
         base_retry_delay_seconds: float,
         stop_retry_delay_seconds: float,
+        environment_context: EnvironmentContext | None,
+        direct_environment_readings: list[DirectEnvironmentReading],
+        enclosure_type: str | None,
     ) -> tuple[dict[str, Any] | None, str | None, str | None]:
         """Retry only one transient Gemini failure class for this one frame."""
         for retry_number in range(max_transient_retries + 1):
@@ -245,6 +259,9 @@ class VideoMonitoringService:
                         source_info=source_info,
                         animal_name=animal_name,
                         expected_species=expected_species,
+                        environment_context=environment_context,
+                        direct_environment_readings=direct_environment_readings,
+                        enclosure_type=enclosure_type,
                     ),
                     None,
                     None,

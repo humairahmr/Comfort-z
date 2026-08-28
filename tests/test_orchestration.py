@@ -3,6 +3,8 @@ from datetime import date, datetime, timezone
 
 from comfort_z.models import (
     DailyReportNarrative,
+    DirectEnvironmentReading,
+    EnvironmentContext,
     GeminiObservation,
     MonitoringProfile,
     MonitoringSourceType,
@@ -144,6 +146,89 @@ def test_gcs_profile_uses_temporary_input_but_preserves_original_source_referenc
     assert video.calls[0]["source"] == str(local_download)
     assert video.calls[0]["source_label"] == source_reference
     assert repository.get_profile("raku").source_reference == source_reference
+
+
+class RecordingEnvironmentProvider:
+    def __init__(self, context=None, error=None):
+        self.context = context
+        self.error = error
+        self.calls = []
+
+    def get_current_context(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.context
+
+
+def test_profile_without_location_skips_weather_lookup_and_monitoring_is_unchanged(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    repository.save_profile(profile())
+    video = RecordingVideoService([session()])
+    provider = RecordingEnvironmentProvider(error=AssertionError("provider must not be called"))
+
+    monitor_next_window(
+        "raku",
+        state_repository=repository,
+        video_service=video,
+        environment_provider=provider,
+    )
+
+    assert provider.calls == []
+    assert video.calls[0]["environment_context"] is None
+    assert video.calls[0]["direct_environment_readings"] == []
+
+
+def test_weather_context_is_passed_when_profile_has_coordinates(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    reading = DirectEnvironmentReading(reading_type="water_temperature", value=26, unit="C")
+    repository.save_profile(
+        profile(
+            location_name="Test location",
+            latitude=1.0,
+            longitude=2.0,
+            enclosure_type="aquarium",
+            direct_environment_readings=[reading],
+        )
+    )
+    context = EnvironmentContext(
+        provider="test-weather",
+        location_name="Test location",
+        outdoor_temperature_c=33,
+        observed_at=datetime(2026, 8, 28, 12, tzinfo=timezone.utc),
+    )
+    provider = RecordingEnvironmentProvider(context=context)
+    video = RecordingVideoService([session()])
+
+    monitor_next_window(
+        "raku",
+        state_repository=repository,
+        video_service=video,
+        environment_provider=provider,
+    )
+
+    assert provider.calls == [{"location_name": "Test location", "latitude": 1.0, "longitude": 2.0}]
+    assert video.calls[0]["environment_context"] == context
+    assert video.calls[0]["direct_environment_readings"] == [reading]
+    assert video.calls[0]["enclosure_type"] == "aquarium"
+
+
+def test_weather_failure_does_not_block_bounded_monitoring(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    repository.save_profile(profile(latitude=1.0, longitude=2.0))
+    video = RecordingVideoService([session()])
+    provider = RecordingEnvironmentProvider(error=RuntimeError("weather unavailable"))
+
+    result = monitor_next_window(
+        "raku",
+        state_repository=repository,
+        video_service=video,
+        environment_provider=provider,
+    )
+
+    assert result.ended_reason == "max_samples_reached"
+    assert len(video.calls) == 1
+    assert video.calls[0]["environment_context"] is None
 
 
 def test_daily_budget_limits_next_window_attempts_and_prevents_extra_run(tmp_path):

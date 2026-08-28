@@ -68,10 +68,16 @@ def test_monitor_endpoint_returns_non_sensitive_storage_error(monkeypatch):
 
 
 def test_monitoring_profile_and_bounded_window_endpoints_delegate_to_tools(monkeypatch):
+    received = {}
+
+    def save_profile(**kwargs):
+        received.update(kwargs)
+        return {"animal_id": kwargs["animal_id"], "active": True}
+
     monkeypatch.setattr(
         api,
         "create_monitoring_profile",
-        lambda **kwargs: {"animal_id": kwargs["animal_id"], "active": True},
+        save_profile,
     )
     monkeypatch.setattr(
         api,
@@ -91,12 +97,21 @@ def test_monitoring_profile_and_bounded_window_endpoints_delegate_to_tools(monke
             "monitoring_goal": "Keep an eye on Raku.",
             "source_reference": "Raku.mp4",
             "source_type": "video",
+            "location_name": "Test location",
+            "latitude": 1.0,
+            "longitude": 2.0,
+            "enclosure_type": "aquarium",
+            "direct_environment_readings": [
+                {"reading_type": "water_temperature", "value": 26, "unit": "C"}
+            ],
         },
     )
     window = client.post("/monitoring/raku/next-window", json={"window_max_samples": 2})
 
     assert profile.status_code == 200
     assert profile.json() == {"animal_id": "raku", "active": True}
+    assert received["latitude"] == 1.0
+    assert received["direct_environment_readings"][0]["source"] == "owner"
     assert window.status_code == 200
     assert window.json()["window_max_samples"] == 2
 

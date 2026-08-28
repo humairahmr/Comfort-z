@@ -2,17 +2,25 @@
 from __future__ import annotations
 import mimetypes
 import os
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from comfort_z.models import DailyReportNarrative, GeminiObservation
+from comfort_z.models import (
+    DailyReportNarrative,
+    DirectEnvironmentReading,
+    EnvironmentContext,
+    GeminiObservation,
+)
 
 _PROMPT = """You are Comfort-z's visual observation component. Analyze only what is visibly supported by the supplied animal image or short visual input. Return the requested structured observation. Do not diagnose disease or claim certainty. Use wording such as 'potentially concerning', 'visible abnormality', 'consider monitoring', or 'seek professional veterinary advice'. A single uncertain visual observation should usually have severity 'monitor', not 'potentially_concerning'. Set severity using visible evidence only.
 
 Always set animal_visible and observation_status. If the monitored animal is not sufficiently visible, set animal_visible to false and observation_status to animal_not_visible or uncertain. In that case, set species to null, do not infer behaviour from another animal or object, and set severity to monitor rather than normal. These records are provenance only and do not establish that the monitored animal is normal."""
 
 _REPORT_PROMPT = """You are Comfort-z's daily animal-monitoring reporting component. Summarize only the supplied structured observation records; no images are being supplied. Be evidence-based and non-diagnostic. Clearly distinguish valid observations from frames where the monitored animal was not visible or was uncertain. Do not claim that missing visibility means normal behaviour. Describe potentially concerning records and saved alert decisions, meaningful change relative to prior valid records when supplied, and a practical next action."""
+
+_OUTDOOR_CONTEXT_PROMPT = """The following is outdoor/local weather context only. It can be supporting context, but must never be treated as the temperature, humidity, or other condition inside an aquarium, terrarium, cage, room, or enclosure. Do not diagnose or make a health claim from outdoor weather alone. Owner-provided direct readings, if supplied, are distinct evidence. If a needed enclosure condition is unknown, state that a direct reading is needed rather than inventing one."""
 
 load_dotenv()
 
@@ -32,6 +40,8 @@ class GeminiVisualAnalyzer:
         self,
         image_path: str,
         expected_species: str | None = None,
+        environment_context: EnvironmentContext | None = None,
+        direct_environment_readings: list[DirectEnvironmentReading] | None = None,
     ) -> GeminiObservation:
         path = Path(image_path)
         if not path.is_file():
@@ -46,6 +56,14 @@ class GeminiVisualAnalyzer:
                 "present. Do not replace it with a different species based on another animal "
                 "or object in the frame. If evidence for the expected animal is poor, mark it "
                 "not visible or uncertain rather than identifying a different species."
+            )
+        if environment_context:
+            context += "\n\n" + _OUTDOOR_CONTEXT_PROMPT
+            context += "\nOutdoor/local weather context:\n" + json.dumps(
+                environment_context.model_dump(mode="json")
+            )
+            context += "\nOwner-provided direct readings:\n" + json.dumps(
+                [reading.model_dump(mode="json") for reading in direct_environment_readings or []]
             )
         response = self.client.models.generate_content(
             model=self.model,
@@ -77,7 +95,7 @@ class GeminiDailyReportGenerator:
     def generate(self, structured_history: dict) -> DailyReportNarrative:
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[_REPORT_PROMPT, structured_history],
+            contents=[_REPORT_PROMPT + "\n\n" + _OUTDOOR_CONTEXT_PROMPT, structured_history],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=DailyReportNarrative,

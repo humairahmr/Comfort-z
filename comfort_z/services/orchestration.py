@@ -18,6 +18,7 @@ from comfort_z.models import (
 )
 from comfort_z.services.analyzer import GeminiDailyReportGenerator
 from comfort_z.services.comparison import is_valid_animal_observation
+from comfort_z.services.environment import EnvironmentProvider, OpenMeteoEnvironmentProvider
 from comfort_z.services.repository import (
     MonitoringStateRepository,
     ObservationRepository,
@@ -62,6 +63,7 @@ def monitor_next_window(
     state_repository: MonitoringStateRepository | None = None,
     video_service: VideoMonitoringService | None = None,
     source_resolver: Callable[[str | int], AbstractContextManager[ResolvedVideoSource]] = resolve_video_source,
+    environment_provider: EnvironmentProvider | None = None,
     now: datetime | None = None,
 ) -> MonitoringWindowResult:
     """Process one finite source window and save its resume cursor and quota state."""
@@ -90,6 +92,7 @@ def monitor_next_window(
         else profile.normal_sampling_interval_seconds
     )
     service = video_service or VideoMonitoringService()
+    environment_context = _environment_context_for_profile(profile, environment_provider)
     with source_resolver(profile.source_reference) as resolved_source:
         session = service.monitor(
             animal_id=profile.animal_id,
@@ -99,6 +102,9 @@ def monitor_next_window(
             max_samples=min(window_max_samples, remaining),
             animal_name=profile.animal_name,
             expected_species=profile.expected_species,
+            environment_context=environment_context,
+            direct_environment_readings=profile.direct_environment_readings,
+            enclosure_type=profile.enclosure_type,
             start_at_seconds=profile.source_cursor_seconds,
         )
 
@@ -287,4 +293,31 @@ def _observation_summary(observation) -> dict:
         "confidence": visual.confidence,
         "alert_status": observation.alert_status,
         "trend": observation.trend.value if observation.trend else None,
+        "environment_context": (
+            observation.environment_context.model_dump(mode="json")
+            if observation.environment_context
+            else None
+        ),
+        "direct_environment_readings": [
+            reading.model_dump(mode="json")
+            for reading in observation.direct_environment_readings
+        ],
+        "missing_direct_reading_requests": observation.missing_direct_reading_requests,
     }
+
+
+def _environment_context_for_profile(
+    profile: MonitoringProfile,
+    provider: EnvironmentProvider | None,
+):
+    if profile.latitude is None or profile.longitude is None:
+        return None
+    try:
+        return (provider or OpenMeteoEnvironmentProvider()).get_current_context(
+            location_name=profile.location_name,
+            latitude=profile.latitude,
+            longitude=profile.longitude,
+        )
+    except Exception:
+        # Weather is supplemental context; an unavailable provider never blocks monitoring.
+        return None

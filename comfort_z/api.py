@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from comfort_z.agent import root_agent
-from comfort_z.models import MonitoringProfile, MonitoringSourceType
+from comfort_z.models import DirectEnvironmentReading, MonitoringProfile, MonitoringSourceType
 from comfort_z.services.repository import ObservationRepositoryError, get_monitoring_state_repository
 from comfort_z.tools.monitoring import (
     create_monitoring_profile,
@@ -46,6 +46,11 @@ class MonitoringProfileRequest(BaseModel):
     daily_sample_budget: int = Field(default=24, gt=0)
     animal_name: str | None = None
     expected_species: str | None = None
+    location_name: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    enclosure_type: str | None = None
+    direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
     report_time: str = "08:00"
     timezone: str = "UTC"
 

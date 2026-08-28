@@ -1,7 +1,15 @@
 """Stateful tools that make Comfort-z a monitoring agent, not a chat wrapper."""
-from comfort_z.models import MonitoringProfile, MonitorResult, Severity, StoredObservation
+from comfort_z.models import (
+    DirectEnvironmentReading,
+    EnvironmentContext,
+    MonitoringProfile,
+    MonitorResult,
+    Severity,
+    StoredObservation,
+)
 from comfort_z.services.analyzer import GeminiVisualAnalyzer
 from comfort_z.services.comparison import decide_monitoring
+from comfort_z.services.environment import missing_direct_reading_requests
 from comfort_z.services.repository import get_repository
 
 def monitor_animal(
@@ -10,6 +18,9 @@ def monitor_animal(
     source_info: str | None = None,
     animal_name: str | None = None,
     expected_species: str | None = None,
+    environment_context: EnvironmentContext | None = None,
+    direct_environment_readings: list[DirectEnvironmentReading] | None = None,
+    enclosure_type: str | None = None,
 ) -> dict:
     """Analyze, save, compare, and decide whether a visual observation needs an alert.
 
@@ -28,6 +39,8 @@ def monitor_animal(
     visual = GeminiVisualAnalyzer().analyze_file(
         image_path,
         expected_species=expected_species,
+        environment_context=environment_context,
+        direct_environment_readings=direct_environment_readings,
     )
     if not visual.animal_visible or visual.observation_status.value != "valid":
         visual = visual.model_copy(update={"severity": Severity.MONITOR})
@@ -39,6 +52,11 @@ def monitor_animal(
         severity=visual.severity,
         explanation=visual.behavioral_interpretation,
         source_info=source_info,
+        environment_context=environment_context,
+        direct_environment_readings=direct_environment_readings or [],
+        missing_direct_reading_requests=missing_direct_reading_requests(
+            environment_context, direct_environment_readings or [], enclosure_type
+        ),
     )
     decision = decide_monitoring(current, prior)
     current = current.model_copy(
@@ -64,6 +82,11 @@ def create_monitoring_profile(
     daily_sample_budget: int = 24,
     animal_name: str | None = None,
     expected_species: str | None = None,
+    location_name: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    enclosure_type: str | None = None,
+    direct_environment_readings: list[DirectEnvironmentReading] | None = None,
     report_time: str = "08:00",
     timezone: str = "UTC",
 ) -> dict:
@@ -74,6 +97,11 @@ def create_monitoring_profile(
         animal_id=animal_id.strip(),
         animal_name=animal_name,
         expected_species=expected_species,
+        location_name=location_name,
+        latitude=latitude,
+        longitude=longitude,
+        enclosure_type=enclosure_type,
+        direct_environment_readings=direct_environment_readings or [],
         monitoring_goal=monitoring_goal,
         source_reference=source_reference,
         source_type=source_type,

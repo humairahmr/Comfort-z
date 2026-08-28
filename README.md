@@ -121,6 +121,31 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/animals/raku/reports?limit=5
 
 The report sends Gemini only structured saved observations, never the historical images or video frames. It separates valid behavioural evidence from `animal_not_visible` and `uncertain` counts, includes saved alert decisions, and persists the resulting report. A future Cloud Scheduler configuration can call the already-bounded `POST /monitoring/{animal_id}/next-window` and daily-report endpoints; this repository does not configure a scheduler.
 
+### Optional outdoor weather and enclosure readings
+
+A monitoring profile may include `location_name`, `latitude`, `longitude`, `enclosure_type`, and owner-provided `direct_environment_readings`. Weather is requested only when both coordinates are present. The built-in Open-Meteo adapter retrieves current outdoor 2 m air temperature, humidity, and weather condition without a configured API key; lookup failure is ignored so normal monitoring continues.
+
+Outdoor weather is supporting context only. Comfort-z explicitly tells Gemini that it must not equate outdoor conditions with an aquarium, terrarium, cage, room, or other enclosure. Owner readings are distinct structured records with `reading_type`, `value`, `unit`, `recorded_at`, and `source: "owner"`. For broadly hot or cold outdoor conditions, if no direct temperature reading is provided, Comfort-z can persist a request for an owner measurement; it does not change behavioural severity or fabricate an enclosure temperature.
+
+For example, an optional profile payload can include:
+
+```json
+{
+  "location_name": "Owner-provided location",
+  "latitude": 0.0,
+  "longitude": 0.0,
+  "enclosure_type": "aquarium",
+  "direct_environment_readings": [
+    {
+      "reading_type": "water_temperature",
+      "value": 26.0,
+      "unit": "C",
+      "source": "owner"
+    }
+  ]
+}
+```
+
 ## Storage and alerts
 
 Default storage is `data/observations.json`. Firestore is used only when `OBSERVATION_STORE=firestore` and `GOOGLE_CLOUD_PROJECT` are set. It uses Application Default Credentials and stores records at `animals/{animal_id}/observations/{observation_id}`: the parent stores stable animal metadata and every observation document retains the existing structured observation payload. `FIRESTORE_OBSERVATIONS_COLLECTION` defaults to `observations`; leave `OBSERVATION_STORE=local` for the validated local fallback. The policy is intentionally simple: a first uncertain/concerning observation is saved for follow-up, while a visible worsening or at least two concerning results among the newest three observations creates an alert. It never makes medical diagnoses.
