@@ -36,6 +36,58 @@ class SamplingMode(str, Enum):
     ELEVATED = "elevated"
 
 
+class ResearchSourceCategory(str, Enum):
+    """Quality classification for compact, persisted external research evidence."""
+
+    AUTHORITATIVE = "authoritative"
+    MANUFACTURER_DOCUMENTATION = "manufacturer_documentation"
+    COMMUNITY = "community"
+    UNKNOWN = "unknown"
+
+
+class ResearchDecision(BaseModel):
+    """Why bounded external research was, or was not, considered useful."""
+
+    needed: bool
+    reason: str
+    research_question: str | None = None
+    trigger_type: str | None = None
+    confidence: float = Field(ge=0, le=1)
+
+
+class ResearchSource(BaseModel):
+    """A short provenance record; never store a retrieved source's raw page body."""
+
+    title: str
+    reference: str
+    category: ResearchSourceCategory
+    evidence: str
+    source_name: str | None = None
+    # A provider may label an explicitly contradictory source without asking the
+    # monitoring model to infer agreement from unstructured text.
+    stance: Literal["supports", "conflicts", "unknown"] = "unknown"
+
+
+class ResearchResult(BaseModel):
+    query: str
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    sources: list[ResearchSource] = Field(default_factory=list)
+    evidence_summary: str
+    community_summary: str
+    conflicts_or_uncertainty: str
+    recommendation: str
+    confidence: float = Field(ge=0, le=1)
+
+
+class ResearchContext(BaseModel):
+    """Conditional research attached to one observation and reusable by reports."""
+
+    decision: ResearchDecision
+    result: ResearchResult | None = None
+    failure: str | None = None
+    reused_from_observation_id: str | None = None
+
+
 class DirectEnvironmentReading(BaseModel):
     """An owner-supplied measurement, distinct from outdoor weather context."""
 
@@ -91,6 +143,7 @@ class StoredObservation(BaseModel):
     environment_context: EnvironmentContext | None = None
     direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
     missing_direct_reading_requests: list[str] = Field(default_factory=list)
+    research_context: ResearchContext | None = None
     # Persist the existing policy outcome so period reports can describe alerts
     # without re-running comparison logic against historical records.
     alert_status: bool = False

@@ -121,6 +121,10 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/animals/raku/reports?limit=5
 
 The report sends Gemini only structured saved observations, never the historical images or video frames. It separates valid behavioural evidence from `animal_not_visible` and `uncertain` counts, includes saved alert decisions, and persists the resulting report. A future Cloud Scheduler configuration can call the already-bounded `POST /monitoring/{animal_id}/next-window` and daily-report endpoints; this repository does not configure a scheduler.
 
+### Conditional research context
+
+Comfort-z evaluates optional external research only after a valid observation shows a worsening, recurring, alerting, or explicitly unresolved non-normal pattern. It does not search for normal, non-visible, uncertain-visibility, or first isolated mild observations. The current repository provides a mockable provider interface only—no web provider or network request is enabled by default. Any future provider is limited to five short source summaries, persisted with the triggering observation. Source quality is explicit (`authoritative`, `manufacturer_documentation`, `community`, or `unknown`); community material is always labelled anecdotal and cannot override authoritative guidance. Matching successful research is reused for 24 hours, and daily reports consume the saved context without refetching it.
+
 ### Optional outdoor weather and enclosure readings
 
 A monitoring profile may include `location_name`, `latitude`, `longitude`, `enclosure_type`, and owner-provided `direct_environment_readings`. Weather is requested only when both coordinates are present. The built-in Open-Meteo adapter retrieves current outdoor 2 m air temperature, humidity, and weather condition without a configured API key; lookup failure is ignored so normal monitoring continues.

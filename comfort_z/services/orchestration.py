@@ -318,6 +318,11 @@ def _observation_summary(observation) -> dict:
             for reading in observation.direct_environment_readings
         ],
         "missing_direct_reading_requests": observation.missing_direct_reading_requests,
+        "research_context": (
+            observation.research_context.model_dump(mode="json")
+            if observation.research_context
+            else None
+        ),
     }
 
 

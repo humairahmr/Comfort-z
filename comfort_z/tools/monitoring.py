@@ -11,6 +11,7 @@ from comfort_z.services.analyzer import GeminiVisualAnalyzer
 from comfort_z.services.comparison import decide_monitoring
 from comfort_z.services.environment import missing_direct_reading_requests
 from comfort_z.services.repository import get_repository
+from comfort_z.services.research import get_research_provider, maybe_research
 
 def monitor_animal(
     animal_id: str,
@@ -59,8 +60,19 @@ def monitor_animal(
         ),
     )
     decision = decide_monitoring(current, prior)
+    research_context = maybe_research(
+        current,
+        prior,
+        trend=decision.trend,
+        alert_status=decision.alert_status,
+        provider=get_research_provider(),
+    )
     current = current.model_copy(
-        update={"alert_status": decision.alert_status, "trend": decision.trend}
+        update={
+            "alert_status": decision.alert_status,
+            "trend": decision.trend,
+            "research_context": research_context,
+        }
     )
     repository.save(current)
     result = MonitorResult(observation=current, decision=decision, history_count=len(prior))
