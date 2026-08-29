@@ -93,14 +93,24 @@ class GeminiDailyReportGenerator:
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
 
     def generate(self, structured_history: dict) -> DailyReportNarrative:
+        history_json = json.dumps(
+            structured_history,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+
         response = self.client.models.generate_content(
             model=self.model,
             contents=[_REPORT_PROMPT + "\n\n" + _OUTDOOR_CONTEXT_PROMPT, history_json],
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=DailyReportNarrative,
                 temperature=0.1,
             ),
         )
+
         if not response.text:
             raise RuntimeError("Gemini returned no structured daily report.")
+
         return DailyReportNarrative.model_validate_json(response.text)
