@@ -253,10 +253,10 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
     telemetryPane.innerHTML = `
       <div>
         <div class="stage-telemetry-header">
-          <span class="stage-telemetry-title">Behavioral Synthesis</span>
+          <span class="stage-telemetry-title">Observation</span>
           <span class="badge badge-stage-${severity}">
             <span class="badge-dot"></span>
-            ${escapeHtml(gemini.observation_status || severity)} • ${isVisible ? 'Animal Visible' : 'Animal Not Visible'}
+            ${isVisible ? 'Animal visible' : 'Animal not visible'}
           </span>
         </div>
         <div style="margin-top: var(--space-4);">

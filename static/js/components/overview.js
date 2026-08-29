@@ -34,7 +34,7 @@ export function renderOverview(animals, navigate) {
 
 export function renderAllAnimals(animals, navigate) {
   const container = document.createElement('div');
-  container.className = 'overview-container';
+  container.className = 'overview-container all-animals-container';
 
   const heading = document.createElement('header');
   heading.className = 'overview-heading';
@@ -53,6 +53,9 @@ export function renderAllAnimals(animals, navigate) {
 function createAnimalsSection(animals, navigate, { includePrototypeCards = true } = {}) {
   const section = document.createElement('section');
   section.className = 'animals-section';
+  if (!includePrototypeCards && animals.length === 1) {
+    section.classList.add('animals-section--single-profile');
+  }
   section.innerHTML = '<div class="animals-section-heading"><h2>My Animals</h2><p>Only configured profiles are shown here.</p></div>';
   const grid = document.createElement('div');
   grid.className = 'animal-card-grid';

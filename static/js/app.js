@@ -26,39 +26,38 @@ async function syncHealth() {
     const health = await api.getHealth();
     state.health = health;
     if (health) {
-      if (healthAgent) healthAgent.textContent = `${health.agent} (${health.model})`;
+      if (healthAgent) healthAgent.textContent = `Google ADK · ${health.model || 'Gemini'}`;
       if (healthStore) healthStore.textContent = `${health.observation_store}`;
       if (mobileHealth) mobileHealth.textContent = `${health.agent}`;
       if (statusDot) statusDot.className = 'status-dot';
     }
   } catch (err) {
-    if (healthAgent) healthAgent.textContent = 'Offline / Connecting';
+    if (healthAgent) healthAgent.textContent = 'Monitoring service unavailable';
     if (mobileHealth) mobileHealth.textContent = 'Offline';
     if (statusDot) statusDot.className = 'status-dot offline';
   }
 }
 
 function updateNavActive(hash) {
-  const navOverview = document.getElementById('nav-overview');
-  const navAnimals = document.getElementById('nav-animals');
-  const navMonitoring = document.getElementById('nav-monitoring');
-  const navItems = [navOverview, navAnimals, navMonitoring].filter(Boolean);
+  const navItems = [...document.querySelectorAll('[data-nav-route]')];
 
   navItems.forEach((item) => {
     item.classList.remove('active');
     item.removeAttribute('aria-current');
   });
 
-  let activeItem = navOverview;
+  let activeRoute = 'overview';
   if (hash === '#/animals') {
-    activeItem = navAnimals;
+    activeRoute = 'animals';
   } else if (hash.startsWith('#/animals/')) {
-    activeItem = navMonitoring;
+    activeRoute = 'monitoring';
   }
-  if (activeItem) {
-    activeItem.classList.add('active');
-    activeItem.setAttribute('aria-current', 'page');
-  }
+  navItems
+    .filter((item) => item.dataset.navRoute === activeRoute)
+    .forEach((item) => {
+      item.classList.add('active');
+      item.setAttribute('aria-current', 'page');
+    });
 }
 
 async function handleRoute() {

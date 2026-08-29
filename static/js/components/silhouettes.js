@@ -2,7 +2,8 @@
 
 export function getAnimalCategory(speciesOrType = '') {
   const value = String(speciesOrType).toLowerCase();
-  if (/betta|fish|tetra|cichlid|goldfish|koi|guppy/.test(value)) return 'fish';
+  if (/betta/.test(value)) return 'betta';
+  if (/fish|tetra|cichlid|goldfish|koi|guppy/.test(value)) return 'fish';
   if (/domestic cat|felis|\bcat\b|kitten/.test(value)) return 'cat';
   if (/canis|\bdog\b|puppy/.test(value)) return 'dog';
   if (/parrot|budgie|\bbird\b|cockatiel|finch/.test(value)) return 'bird';
@@ -26,6 +27,7 @@ export function renderAnimalVisual(profile, { className = 'animal-visual', alt =
 
 function silhouetteSvg(category) {
   const paths = {
+    betta: '<path d="M119 77c18-19 42-34 70-37-15 16-20 30-16 43 5 17 19 28 12 48-16-10-30-12-39 3-9 15-20 22-36 25 14-19 19-36 15-52-3-12-5-21-6-30Z" opacity=".72"/><path d="M36 91c3-18 18-29 38-32 21-4 41 3 53 18 13 16 13 34 2 48-12 16-33 24-55 21-21-3-35-14-38-31-2-8-2-16 0-24Z"/><path d="M70 62c3-20 16-34 35-40-6 18-1 33 14 48-15-7-31-10-49-8Z" opacity=".58"/><path d="M58 119c19 11 43 13 67 0-7 20-21 35-39 43 3-16-6-29-28-43Z" opacity=".66"/><path d="M69 127c0 18-7 31-18 39 15-7 25-19 29-36M79 130c2 15 10 25 22 31-8-12-12-24-11-37" opacity=".46"/><circle cx="54" cy="84" r="3.6" class="silhouette-cutout"/>',
     fish: '<path d="M17 62c22-25 53-33 82-25 20 6 33 19 46 28l31-26-7 30 7 30-31-26c-16 12-36 21-61 21-28 0-51-11-67-32Z"/><path d="M72 40c-2-18 8-29 20-36-1 18 5 27 18 36M78 84c-2 20 8 31 22 38-3-19 4-28 17-38" opacity=".62"/><circle cx="54" cy="55" r="4" class="silhouette-cutout"/>',
     cat: '<path d="M39 117c-5-23 1-47 18-60L51 22l27 16c8-3 17-3 25 0l27-16-6 35c17 14 23 37 18 60l-15 38H54l-15-38Z"/><path d="M60 91c10 7 22 7 31 0 10 7 22 7 31 0" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"/><circle cx="72" cy="73" r="4" class="silhouette-cutout"/><circle cx="111" cy="73" r="4" class="silhouette-cutout"/>',
     dog: '<path d="M37 142c-8-34 1-66 25-84L48 26l35 14c13-5 30-4 44 2l31-19-7 43c14 19 18 47 8 76l-18 24H55l-18-24Z"/><path d="M70 107c12 11 33 11 45 0" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"/><circle cx="78" cy="82" r="4" class="silhouette-cutout"/><circle cx="120" cy="82" r="4" class="silhouette-cutout"/>',

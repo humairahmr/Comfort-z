@@ -51,6 +51,7 @@ button { border: 0; }
 
 .mobile-header { display: none; align-items: center; justify-content: space-between; min-height: 68px; padding: 0 20px; color: #fff; background: var(--color-primary); }
 .mobile-header .brand-wordmark { font-size: 1.9rem; }
+.mobile-nav { display: none; }
 .main-workspace { width: min(100%, 1420px); padding: clamp(28px, 4vw, 58px); margin: 0 auto; }
 .app-footer { padding: 20px 28px 24px 268px; color: var(--color-text-muted); background: var(--color-bg); font-size: .72rem; text-align: center; }
 .app-footer p { margin: 0; }
@@ -87,11 +88,16 @@ button { border: 0; }
   .app-shell { display: block; min-height: calc(100vh - 62px); }
   .nav-rail { display: none; }
   .mobile-header { display: flex; }
+  .mobile-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 46px; background: var(--color-primary); border-top: 1px solid rgba(255,255,255,.12); }
+  .mobile-nav a { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 10px 8px; color: rgba(255,255,255,.65); font-size: .72rem; font-weight: 750; line-height: 1.15; text-align: center; text-decoration: none; }
+  .mobile-nav a.active { color: #fff; background: rgba(217,155,127,.18); }
+  .mobile-nav a:focus-visible { outline-offset: -3px; }
   .main-workspace { padding: 22px 16px 32px; }
   .app-footer { padding: 18px 20px 24px; }
 }
 @media (max-width: 480px) {
   .mobile-header { padding-inline: 15px; }
   .mobile-header .status-chip-compact { display: none; }
+  .mobile-nav a { padding-inline: 5px; font-size: .68rem; }
   .main-workspace { padding-inline: 12px; }
 }
