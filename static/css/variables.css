@@ -1,55 +1,112 @@
 /* Comfort-z Design System Tokens
-   Aesthetic: Calm, warm, trustworthy, animal-care focused
-   Palette: Aquarium water, botanical plants, warm cream, muted blue/green
+   Core Brand Palette:
+   - #0F3040 : Primary Deep Ocean / Navy
+   - #464858 : Secondary Muted Slate
+   - #A56F63 : Dusty Terracotta Accent
+   - #D99B7F : Soft Coral / Peach Accent
+   - #FAF8F5 : Very Light Warm Neutral Background
 */
 
 :root {
-  /* Surface & Background */
-  --color-bg: #FAF7F2;
-  --color-bg-subtle: #F3ECE2;
+  /* Surface & Background (Light Warm Neutral Editorial Ground) */
+  --color-bg: #FAF8F5;
+  --color-bg-subtle: #F3EFE9;
   --color-surface: #FFFFFF;
   --color-surface-hover: #FDFBF8;
   --color-surface-card: #FFFFFF;
-  --color-border: #E8E0D5;
-  --color-border-subtle: #F0EAE1;
-  --color-border-focus: #4A7C8F;
+  --color-border: #E5DFD7;
+  --color-border-subtle: #EFEAE3;
+  --color-border-focus: #0F3040;
 
-  /* Text & Contrast */
-  --color-text-primary: #22292F;
-  --color-text-secondary: #586571;
-  --color-text-muted: #8895A2;
+  /* Primary Typography & Contrast (#0F3040 Deep Navy / #464858 Slate) */
+  --color-text-primary: #0F3040;
+  --color-text-secondary: #464858;
+  --color-text-muted: #7E8294;
   --color-text-inverse: #FFFFFF;
 
-  /* Brand / Aquarium Blues */
-  --color-primary: #34627B;
-  --color-primary-hover: #295066;
-  --color-primary-light: #EBF3F7;
-  --color-primary-dark: #1E3D4F;
+  /* Core Palette 1: Primary Deep Ocean Navy (#0F3040) */
+  --color-primary: #0F3040;
+  --color-primary-hover: #174257;
+  --color-primary-light: #E7EFF3;
+  --color-primary-dark: #0A222E;
 
-  /* Botanical Greens (Normal / Stable / Healthy) */
-  --color-sage: #4E7C59;
-  --color-sage-light: #EEF5F0;
-  --color-sage-dark: #37593F;
+  /* Core Palette 2: Secondary Muted Slate (#464858) */
+  --color-secondary: #464858;
+  --color-secondary-light: #ECEEF2;
+  --color-secondary-dark: #32333E;
 
-  /* Warm Ochres & Ambers (Monitor / Attention) */
-  --color-amber: #B87628;
-  --color-amber-light: #FDF5EA;
-  --color-amber-dark: #8C571B;
+  /* Core Palette 3: Dusty Terracotta Accent (#A56F63) */
+  --color-terracotta: #A56F63;
+  --color-terracotta-light: #F6ECE9;
+  --color-terracotta-dark: #7A4E44;
 
-  /* Terracotta & Coral (Alert / Concerning) */
-  --color-coral: #C55338;
-  --color-coral-light: #FBF0ED;
-  --color-coral-dark: #983C25;
+  /* Core Palette 4: Soft Coral / Peach Accent (#D99B7F) */
+  --color-peach: #D99B7F;
+  --color-peach-light: #FAF1EC;
+  --color-peach-dark: #A86A4E;
 
-  /* Neutral Slate */
-  --color-slate: #6C7A89;
-  --color-slate-light: #F1F4F7;
+  /* Semantic Status Mappings (Using Brand Palette Intentionally) */
+  --color-status-normal-bg: #E7EFF3;
+  --color-status-normal-text: #0F3040;
+  --color-status-normal-dot: #0F3040;
 
-  /* Typography */
+  --color-status-monitor-bg: #FAF1EC;
+  --color-status-monitor-text: #A86A4E;
+  --color-status-monitor-dot: #D99B7F;
+
+  --color-status-concerning-bg: #F6ECE9;
+  --color-status-concerning-text: #7A4E44;
+  --color-status-concerning-dot: #A56F63;
+
+  --color-status-neutral-bg: #ECEEF2;
+  --color-status-neutral-text: #464858;
+
+  /* Grounded Research Citation Badges */
+  --color-source-authoritative-bg: #E7EFF3;
+  --color-source-authoritative-text: #0F3040;
+  --color-source-authoritative-border: rgba(15, 48, 64, 0.25);
+  
+  --color-source-manufacturer-bg: #ECEEF2;
+  --color-source-manufacturer-text: #464858;
+  --color-source-manufacturer-border: rgba(70, 72, 88, 0.25);
+  
+  --color-source-community-bg: #FAF1EC;
+  --color-source-community-text: #A86A4E;
+  --color-source-community-border: rgba(217, 155, 127, 0.35);
+
+  /* Unified Observation Stage Tokens (Dark #0F3040 Foundation) */
+  --color-stage-bg: #0F3040;
+  --color-stage-viewport: #091E28;
+  --color-stage-surface: #0A232F;
+  --color-stage-border: #1B455B;
+  --color-stage-divider: #15394B;
+  --color-stage-header-border: #1D4B62;
+  --color-stage-text-muted: #9BB8C7;
+  --color-stage-text-subtle: #BDD4E0;
+  --color-stage-accent: #D99B7F;
+  --color-stage-highlight: #A56F63;
+
+  /* Video & Scrim Overlays */
+  --color-video-bg: #091E28;
+  --color-scrim: rgba(9, 30, 40, 0.8);
+
+  /* Focus Indicator */
+  --focus-ring: 0 0 0 3px rgba(15, 48, 64, 0.25);
+
+  /* Typography Font Families */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Spacing */
+  /* Canonical Type Scale */
+  --font-size-hero: 3.6rem;
+  --font-size-display: 1.6rem;
+  --font-size-headline: 1.3rem;
+  --font-size-title: 1.0rem;
+  --font-size-body: 0.875rem;
+  --font-size-label: 0.75rem;
+  --font-size-mono: 0.8rem;
+
+  /* Spacing Scale */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -60,19 +117,18 @@
   --space-10: 40px;
   --space-12: 48px;
 
-  /* Radii */
+  /* Radii Scale */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
   --radius-full: 9999px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(40, 30, 20, 0.05);
-  --shadow-md: 0 4px 12px rgba(40, 30, 20, 0.07);
-  --shadow-lg: 0 10px 24px rgba(40, 30, 20, 0.09);
+  /* Elevation & Shadows */
+  --shadow-sm: 0 1px 2px rgba(15, 48, 64, 0.05);
+  --shadow-md: 0 4px 12px rgba(15, 48, 64, 0.08);
+  --shadow-lg: 0 10px 24px rgba(15, 48, 64, 0.12);
 
-  /* Layout */
+  /* Layout Constants */
   --max-width: 1280px;
   --header-height: 68px;
 }
-

@@ -1,175 +1,178 @@
-/**
- * Animals Overview Component
- * Renders the top-level monitoring overview with honest state representation.
- */
+/** Overview: real monitoring profiles with decorative, local profile fallbacks. */
 
-import { getSeverityBadge, formatTimestamp } from '../state.js';
+import { formatTimestamp } from '../state.js';
+import { renderAnimalVisual } from './silhouettes.js';
 
 export function renderOverview(animals, navigate) {
   const container = document.createElement('div');
   container.className = 'overview-container';
+  const activeAnimal = animals.find((animal) => animal.active !== false) || animals[0] || null;
 
-  // 10-Second Explainer Mission Banner
-  const banner = document.createElement('div');
-  banner.className = 'explainer-banner';
-  banner.innerHTML = `
-    <div class="explainer-icon">🌿</div>
-    <div class="explainer-body">
-      <h2>Autonomous Animal Care Monitoring</h2>
-      <p>Comfort-z watches an animal autonomously, remembers what it observes, compares behaviour over time, decides when something matters, researches when necessary, and alerts the owner without requiring a new prompt for every observation.</p>
+  const heading = document.createElement('header');
+  heading.className = 'overview-heading';
+  heading.innerHTML = `
+    <div>
+      <h1>Overview</h1>
+      <p>Longitudinal monitoring, presented with the context needed for careful care.</p>
     </div>
+    <span class="overview-live-state"><span></span> ${activeAnimal ? 'Monitoring profiles loaded' : 'No profile configured'}</span>
   `;
-  container.appendChild(banner);
+  container.appendChild(heading);
 
-  // Section Header
-  const header = document.createElement('div');
-  header.className = 'animals-section-header';
-  header.innerHTML = `
-    <h2>Your Monitored Animals</h2>
-    <span class="metric-label">${animals.length} configured ${animals.length === 1 ? 'profile' : 'profiles'}</span>
-  `;
-  container.appendChild(header);
-
-  // Grid
-  const grid = document.createElement('div');
-  grid.className = 'animals-grid';
-
-  // If there are real saved backend profiles, render them
-  if (animals.length > 0) {
-    animals.forEach(profile => {
-      const card = createAnimalCard(profile, navigate);
-      grid.appendChild(card);
-    });
+  if (activeAnimal) {
+    container.appendChild(createHero(activeAnimal, navigate));
   } else {
-    const emptyBox = document.createElement('div');
-    emptyBox.className = 'state-box';
-    emptyBox.style.gridColumn = '1 / -1';
-    emptyBox.innerHTML = `
-      <div class="state-icon">🐾</div>
-      <h3>No monitored animals yet</h3>
-      <p>An animal monitoring profile must be configured before autonomous monitoring begins. Saved profiles will appear here.</p>
-    `;
-    grid.appendChild(emptyBox);
+    const empty = document.createElement('section');
+    empty.className = 'overview-empty-state';
+    empty.innerHTML = '<h2>No monitored animals yet</h2><p>Create a monitoring profile through the existing API to see it here.</p>';
+    container.appendChild(empty);
   }
 
-  // Multi-animal architectural preview card (Clearly labeled as preview)
-  const previewCard = document.createElement('div');
-  previewCard.className = 'card animal-card';
-  previewCard.style.opacity = '0.9';
-  previewCard.style.borderStyle = 'dashed';
-  previewCard.innerHTML = `
-    <div class="animal-card-top">
-      <div>
-        <span class="preview-banner-tag">Architectural Preview</span>
-        <div class="animal-name">Gendut</div>
-        <div class="animal-species">Domestic Cat (Felis catus)</div>
-      </div>
-      <span class="badge badge-neutral">Standby</span>
-    </div>
-    <div class="animal-goal">
-      <strong>Monitoring Goal:</strong> Monitor mobility and resting posture in living room.
-    </div>
-    <div class="animal-metrics">
-      <div class="metric-item">
-        <span class="metric-label">Enclosure</span>
-        <span class="metric-value">Indoor Home</span>
-      </div>
-      <div class="metric-item">
-        <span class="metric-label">Source</span>
-        <span class="metric-value">Living Room Cam</span>
-      </div>
-    </div>
-    <p class="preview-notice">
-      Demonstrates multi-animal system architecture. Behavioural analysis has been demonstrated and tested on Raku.
-    </p>
-    <div class="animal-card-footer">
-      <span class="metric-label">Multi-Animal Ready</span>
-      <span class="card-action-link" style="color: var(--color-text-muted);">Preview Only</span>
-    </div>
-  `;
-  grid.appendChild(previewCard);
-
-  // Add Animal Placeholder Card (Read-only for this pass)
-  const addCard = document.createElement('div');
-  addCard.className = 'card';
-  addCard.style.display = 'flex';
-  addCard.style.flexDirection = 'column';
-  addCard.style.alignItems = 'center';
-  addCard.style.justifyContent = 'center';
-  addCard.style.textAlign = 'center';
-  addCard.style.borderStyle = 'dashed';
-  addCard.style.backgroundColor = 'var(--color-bg-subtle)';
-  addCard.style.padding = 'var(--space-6)';
-  addCard.innerHTML = `
-    <div style="font-size: 1.8rem; margin-bottom: var(--space-2); color: var(--color-primary);">➕</div>
-    <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 4px;">Add New Animal</h3>
-    <p style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: var(--space-4);">Configure a bounded autonomous monitoring profile for another animal.</p>
-    <span class="btn btn-secondary btn-disabled" style="font-size: 0.75rem;">Add Profile (Read-only Pass)</span>
-  `;
-  grid.appendChild(addCard);
-
-  container.appendChild(grid);
+  container.appendChild(createAnimalsSection(animals, navigate));
   return container;
 }
 
-function createAnimalCard(profile, navigate) {
-  const card = document.createElement('div');
-  card.className = 'card animal-card';
+export function renderAllAnimals(animals, navigate) {
+  const container = document.createElement('div');
+  container.className = 'overview-container';
 
-  const animalId = profile.animal_id || 'Unknown';
-  const name = profile.animal_name || animalId;
-  const species = profile.expected_species || 'Species not specified';
-  const goal = profile.monitoring_goal || 'No specific monitoring goal saved.';
-  const mode = profile.current_sampling_mode || 'normal';
-  const used = profile.samples_used_in_current_period || 0;
-  const budget = profile.daily_sample_budget || 24;
-  const remaining = Math.max(0, budget - used);
-  const active = profile.active !== false;
+  const heading = document.createElement('header');
+  heading.className = 'overview-heading';
+  heading.innerHTML = `
+    <div>
+      <h1>All Animals</h1>
+      <p>Configured monitoring profiles and their current status.</p>
+    </div>
+    <span class="overview-live-state"><span></span> ${animals.length} ${animals.length === 1 ? 'profile' : 'profiles'} loaded</span>
+  `;
+  container.appendChild(heading);
+  container.appendChild(createAnimalsSection(animals, navigate, { includePrototypeCards: false }));
+  return container;
+}
 
-  card.innerHTML = `
-    <div class="animal-card-top">
-      <div>
-        <div class="animal-name">${escapeHtml(name)}</div>
-        <div class="animal-species">${escapeHtml(species)}</div>
-      </div>
-      <span class="badge ${active ? 'badge-normal' : 'badge-neutral'}">
-        ${active ? 'Monitoring Active' : 'Inactive'}
-      </span>
+function createAnimalsSection(animals, navigate, { includePrototypeCards = true } = {}) {
+  const section = document.createElement('section');
+  section.className = 'animals-section';
+  section.innerHTML = '<div class="animals-section-heading"><h2>My Animals</h2><p>Only configured profiles are shown here.</p></div>';
+  const grid = document.createElement('div');
+  grid.className = 'animal-card-grid';
+  animals.forEach((animal) => grid.appendChild(createAnimalCard(animal, navigate)));
+  if (includePrototypeCards) {
+    grid.appendChild(createPreviewCard());
+    grid.appendChild(createAddAnimalCard());
+  }
+  section.appendChild(grid);
+  return section;
+}
+
+function createHero(profile, navigate) {
+  const name = profile.animal_name || profile.animal_id;
+  const species = profile.expected_species || 'Species not recorded';
+  const remaining = Math.max(0, (profile.daily_sample_budget || 0) - (profile.samples_used_in_current_period || 0));
+  const hero = document.createElement('article');
+  hero.className = 'animal-hero';
+  hero.tabIndex = 0;
+  hero.setAttribute('aria-label', `Open monitoring console for ${name}`);
+  hero.innerHTML = `
+    <div class="animal-hero-visual-wrap">
+      ${renderAnimalVisual(profile, { className: 'animal-hero-visual', alt: `Profile of ${name}` })}
+      <span class="visual-disclaimer">Decorative profile fallback</span>
     </div>
-    <div class="animal-goal">
-      <strong>Goal:</strong> ${escapeHtml(goal)}
-    </div>
-    <div class="animal-metrics">
-      <div class="metric-item">
-        <span class="metric-label">Sampling Mode</span>
-        <span class="metric-value" style="text-transform: capitalize;">${escapeHtml(mode)}</span>
+    <div class="animal-hero-copy">
+      <div class="animal-hero-status"><span class="status-orb ${profile.active === false ? 'is-idle' : ''}"></span>${profile.active === false ? 'Monitoring inactive' : 'Monitoring active'}</div>
+      <h2>${escapeHtml(name)}</h2>
+      <p class="animal-hero-species">${escapeHtml(species)}</p>
+      <p class="animal-hero-goal">${escapeHtml(profile.monitoring_goal || 'Monitoring goal not recorded.')}</p>
+      <div class="animal-hero-telemetry" aria-label="Monitoring profile telemetry">
+        <span><b>Last run</b>${profile.last_monitoring_run ? escapeHtml(formatTimestamp(profile.last_monitoring_run)) : 'Not yet run'}</span>
+        <span><b>Mode</b>${escapeHtml(profile.current_sampling_mode || 'Not recorded')}</span>
+        <span><b>Budget</b>${profile.daily_sample_budget ? `${remaining} of ${profile.daily_sample_budget} left` : 'Not recorded'}</span>
+        <span><b>Source</b>${escapeHtml(sourceLabel(profile))}</span>
       </div>
-      <div class="metric-item">
-        <span class="metric-label">Daily Budget</span>
-        <span class="metric-value">${remaining} / ${budget} remaining</span>
-      </div>
-      <div class="metric-item">
-        <span class="metric-label">Source Type</span>
-        <span class="metric-value" style="text-transform: capitalize;">${escapeHtml(profile.source_type || 'video')}</span>
-      </div>
-      <div class="metric-item">
-        <span class="metric-label">Last Checked</span>
-        <span class="metric-value">${profile.last_monitoring_run ? formatTimestamp(profile.last_monitoring_run) : 'Not yet run'}</span>
-      </div>
-    </div>
-    <div class="animal-card-footer">
-      <span class="metric-label">ID: ${escapeHtml(animalId)}</span>
-      <span class="card-action-link">Open Dashboard →</span>
+      <button class="btn btn-primary hero-console-button">Open monitoring console <span aria-hidden="true">→</span></button>
     </div>
   `;
+  const open = () => navigate(`#/animals/${encodeURIComponent(profile.animal_id)}`);
+  hero.addEventListener('click', open);
+  hero.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  });
+  hero.querySelector('button').addEventListener('click', (event) => {
+    event.stopPropagation();
+    open();
+  });
+  return hero;
+}
 
-  card.addEventListener('click', () => navigate(`#/animals/${encodeURIComponent(animalId)}`));
+function createAnimalCard(profile, navigate) {
+  const name = profile.animal_name || profile.animal_id;
+  const card = document.createElement('article');
+  card.className = 'animal-card';
+  card.tabIndex = 0;
+  card.innerHTML = `
+    <div class="animal-card-visual">${renderAnimalVisual(profile, { className: 'animal-card-silhouette', alt: `Profile of ${name}` })}</div>
+    <div class="animal-card-content">
+      <span class="animal-card-status"><span class="status-orb ${profile.active === false ? 'is-idle' : ''}"></span>${profile.active === false ? 'Inactive' : 'Monitoring active'}</span>
+      <h3>${escapeHtml(name)}</h3>
+      <p>${escapeHtml(profile.expected_species || 'Species not recorded')}</p>
+      <div class="animal-card-footer">
+        <small>${profile.last_monitoring_run ? `Latest: ${escapeHtml(formatTimestamp(profile.last_monitoring_run))}` : 'No monitoring run recorded'}</small>
+        <span class="animal-card-arrow" aria-hidden="true">→</span>
+      </div>
+    </div>
+  `;
+  const open = () => navigate(`#/animals/${encodeURIComponent(profile.animal_id)}`);
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  });
   return card;
 }
 
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
+function createPreviewCard() {
+  const card = document.createElement('article');
+  card.className = 'animal-card animal-card-preview';
+  card.setAttribute('aria-label', 'Gendut architectural preview profile');
+  card.innerHTML = `
+    <div class="animal-card-visual">${renderAnimalVisual({ expected_species: 'Domestic cat' }, { className: 'animal-card-silhouette', alt: '' })}</div>
+    <div class="animal-card-content">
+      <span class="animal-card-status preview-status">Preview profile</span>
+      <h3>Gendut</h3>
+      <p>Domestic cat</p>
+      <small>Architectural preview only — not actively monitored.</small>
+    </div>
+  `;
+  return card;
+}
+
+function createAddAnimalCard() {
+  const card = document.createElement('article');
+  card.className = 'add-animal-card';
+  card.setAttribute('aria-disabled', 'true');
+  card.innerHTML = `
+    <span class="add-animal-icon" aria-hidden="true">+</span>
+    <h3>Add Animal</h3>
+    <p>Profile setup is not configured in this console yet.</p>
+    <span class="add-animal-state">Coming later</span>
+  `;
+  return card;
+}
+
+function sourceLabel(profile) {
+  if (profile.source_type === 'webcam') return 'Live webcam';
+  if (String(profile.source_reference || '').startsWith('gs://')) return 'Cloud video';
+  if (profile.source_type === 'video') return 'Local video';
+  return 'Source not recorded';
+}
+
+function escapeHtml(value) {
+  return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

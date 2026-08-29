@@ -4,13 +4,14 @@
 
 import { api } from './api.js';
 import { state } from './state.js';
-import { renderOverview } from './components/overview.js';
+import { renderAllAnimals, renderOverview } from './components/overview.js';
 import { renderDashboard } from './components/dashboard.js';
 
 const appRoot = document.getElementById('app-root');
 const healthAgent = document.getElementById('health-agent');
 const healthStore = document.getElementById('health-store');
 const statusDot = document.getElementById('status-dot');
+const mobileHealth = document.getElementById('mobile-health');
 
 export function navigate(hash) {
   window.location.hash = hash;
@@ -27,16 +28,43 @@ async function syncHealth() {
     if (health) {
       if (healthAgent) healthAgent.textContent = `${health.agent} (${health.model})`;
       if (healthStore) healthStore.textContent = `${health.observation_store}`;
+      if (mobileHealth) mobileHealth.textContent = `${health.agent}`;
       if (statusDot) statusDot.className = 'status-dot';
     }
   } catch (err) {
     if (healthAgent) healthAgent.textContent = 'Offline / Connecting';
+    if (mobileHealth) mobileHealth.textContent = 'Offline';
     if (statusDot) statusDot.className = 'status-dot offline';
+  }
+}
+
+function updateNavActive(hash) {
+  const navOverview = document.getElementById('nav-overview');
+  const navAnimals = document.getElementById('nav-animals');
+  const navMonitoring = document.getElementById('nav-monitoring');
+  const navItems = [navOverview, navAnimals, navMonitoring].filter(Boolean);
+
+  navItems.forEach((item) => {
+    item.classList.remove('active');
+    item.removeAttribute('aria-current');
+  });
+
+  let activeItem = navOverview;
+  if (hash === '#/animals') {
+    activeItem = navAnimals;
+  } else if (hash.startsWith('#/animals/')) {
+    activeItem = navMonitoring;
+  }
+  if (activeItem) {
+    activeItem.classList.add('active');
+    activeItem.setAttribute('aria-current', 'page');
   }
 }
 
 async function handleRoute() {
   const hash = window.location.hash || '#/overview';
+  updateNavActive(hash);
+
   appRoot.innerHTML = `
     <div class="state-box">
       <div class="state-icon">⏳</div>
@@ -47,9 +75,11 @@ async function handleRoute() {
 
   try {
     if (hash.startsWith('#/animals/')) {
-      const rawId = hash.replace('#/animals/', '').trim();
+      const rawId = hash.replace('#/animals/', '').split('#')[0].trim();
       const animalId = decodeURIComponent(rawId);
       await loadDashboardRoute(animalId);
+    } else if (hash === '#/animals') {
+      await loadAllAnimalsRoute();
     } else {
       await loadOverviewRoute();
     }
@@ -64,6 +94,17 @@ async function loadOverviewRoute() {
     state.animals = animals;
     appRoot.innerHTML = '';
     appRoot.appendChild(renderOverview(animals, navigate));
+  } catch (err) {
+    renderError('Unable to load monitored animals', err.message);
+  }
+}
+
+async function loadAllAnimalsRoute() {
+  try {
+    const animals = await api.getAnimals();
+    state.animals = animals;
+    appRoot.innerHTML = '';
+    appRoot.appendChild(renderAllAnimals(animals, navigate));
   } catch (err) {
     renderError('Unable to load monitored animals', err.message);
   }
@@ -93,10 +134,10 @@ async function loadDashboardRoute(animalId) {
 
 function renderError(title, detail) {
   appRoot.innerHTML = `
-    <div class="state-box" style="border-color: var(--color-coral); background-color: var(--color-coral-light);">
-      <div class="state-icon" style="color: var(--color-coral);">⚠️</div>
-      <h3 style="color: var(--color-coral-dark);">${title}</h3>
-      <p style="color: var(--color-coral-dark);">${detail || 'Check server connection and try again.'}</p>
+    <div class="state-box" style="border-color: var(--color-terracotta); background-color: var(--color-terracotta-light);">
+      <div class="state-icon" style="color: var(--color-terracotta);">⚠️</div>
+      <h3 style="color: var(--color-terracotta-dark);">${title}</h3>
+      <p style="color: var(--color-terracotta-dark);">${detail || 'Check server connection and try again.'}</p>
       <div style="margin-top: var(--space-4);">
         <button class="btn btn-secondary" onclick="window.location.hash='#/overview'">Return to Overview</button>
       </div>
@@ -107,10 +148,12 @@ function renderError(title, detail) {
 // Global Brand Click
 const brandBlock = document.getElementById('brand-home');
 if (brandBlock) {
-  brandBlock.addEventListener('click', () => navigate('#/overview'));
+  brandBlock.addEventListener('click', (e) => {
+    e.preventDefault();
+    navigate('#/overview');
+  });
 }
 
 // Initial Launch
 syncHealth();
 handleRoute();
-
