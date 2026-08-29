@@ -62,7 +62,7 @@ export function renderDashboard(animalId, profile, observations, reports, naviga
   // Right Archives Column: 24h Daily Reports & Chronological Log
   const intelRight = document.createElement('div');
   intelRight.className = 'intel-col';
-  intelRight.appendChild(createReportsModule(animalId, reports, onRefresh));
+  intelRight.appendChild(createReportsModule(animalId, profile, reports, onRefresh));
   intelRight.appendChild(createTimelineModule(observations));
   intelLayout.appendChild(intelRight);
 
@@ -91,12 +91,13 @@ function createAnimalHero(animalId, profile, latestObs) {
   const used = profile ? profile.samples_used_in_current_period || 0 : (latestObs ? 1 : 0);
   const budget = profile ? profile.daily_sample_budget || 24 : 24;
   const remaining = Math.max(0, budget - used);
+  const hasSource = hasMonitoringSource(profile);
 
   // Format source type clearly
-  let sourceLabel = 'Prerecorded Video Feed';
-  if (profile && profile.source_type === 'webcam') {
+  let sourceLabel = hasSource ? 'Prerecorded Video Feed' : 'Monitoring source not connected';
+  if (hasSource && profile.source_type === 'webcam') {
     sourceLabel = 'Live Camera Feed';
-  } else if (profile && String(profile.source_reference).startsWith('gs://')) {
+  } else if (hasSource && String(profile.source_reference).startsWith('gs://')) {
     sourceLabel = 'Cloud Video Feed';
   }
 
@@ -123,9 +124,9 @@ function createAnimalHero(animalId, profile, latestObs) {
   hero.innerHTML = `
     <div class="hero-identity-main">
       <div class="hero-status-row">
-        <span class="badge ${active ? 'badge-normal' : 'badge-neutral'}">
+        <span class="badge ${hasSource && active ? 'badge-normal' : 'badge-neutral'}">
           <span class="badge-dot"></span>
-          ${active ? 'Continuous Monitoring Active' : 'Profile Inactive'}
+          ${!hasSource ? 'Monitoring Source Not Connected' : active ? 'Continuous Monitoring Active' : 'Profile Inactive'}
         </span>
         <span style="font-size: var(--font-size-label); color: var(--color-text-muted);">
           ID: ${escapeHtml(animalId)}
@@ -172,12 +173,15 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   stage.className = 'observation-stage';
   stage.setAttribute('aria-label', 'Visual Monitoring and Observation Stage');
 
-  const sourceInfo = (profile && profile.source_reference) || (latestObs && latestObs.source_info) || 'Visual feed not specified';
+  const hasSource = hasMonitoringSource(profile);
+  const sourceInfo = hasSource
+    ? (profile.source_reference || (latestObs && latestObs.source_info) || 'Visual feed not specified')
+    : 'Monitoring source not connected';
   
-  let sourceBadge = 'Prerecorded Video Feed';
-  if (profile && profile.source_type === 'webcam') {
+  let sourceBadge = hasSource ? 'Prerecorded Video Feed' : 'Source not connected';
+  if (hasSource && profile.source_type === 'webcam') {
     sourceBadge = 'Live Camera Feed';
-  } else if (String(sourceInfo).startsWith('gs://')) {
+  } else if (hasSource && String(sourceInfo).startsWith('gs://')) {
     sourceBadge = 'Cloud Video Feed';
   }
 
@@ -196,7 +200,7 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
       <span style="color: var(--color-stage-text-muted);">${escapeHtml(sourceBadge)}</span>
     </div>
     <div>
-      <span>${latestObs ? 'Sampled: ' + formatTimestamp(latestObs.timestamp) : 'Awaiting observation cycle'}</span>
+      <span>${latestObs ? 'Sampled: ' + formatTimestamp(latestObs.timestamp) : hasSource ? 'Awaiting observation cycle' : 'Source required before monitoring'}</span>
     </div>
   `;
   stage.appendChild(topBar);
@@ -208,31 +212,44 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   // Left Pane: Media Frame
   const mediaPane = document.createElement('div');
   mediaPane.className = 'stage-media-pane';
-  mediaPane.innerHTML = `
-    <div class="stage-video-frame">
-      <video class="stage-video-player" controls muted preload="metadata" playsinline>
-        <source src="/demo-video/raku.mp4" type="video/mp4">
-        Your browser does not support video playback.
-      </video>
-      <div class="stage-source-badge">
-        <span class="badge-dot" style="background-color: var(--color-peach);"></span>
-        <span>${escapeHtml(sourceBadge)}</span>
-      </div>
-    </div>
-  `;
-
-  const videoEl = mediaPane.querySelector('video');
-  videoEl.addEventListener('error', () => {
-    const frame = mediaPane.querySelector('.stage-video-frame');
-    frame.innerHTML = `
-      <div class="stage-placeholder">
-        <h3>Visual Feed Connected</h3>
-        <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
-          Cloud Storage source active. Bounded frame extraction and multimodal inference operate on stored media.
-        </p>
+  if (!hasSource) {
+    mediaPane.innerHTML = `
+      <div class="stage-video-frame">
+        <div class="stage-placeholder">
+          <h3>Monitoring source not connected</h3>
+          <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
+            This animal profile is saved. Connect a monitoring source before Comfort-z can collect observations.
+          </p>
+        </div>
       </div>
     `;
-  });
+  } else {
+    mediaPane.innerHTML = `
+      <div class="stage-video-frame">
+        <video class="stage-video-player" controls muted preload="metadata" playsinline>
+          <source src="/demo-video/raku.mp4" type="video/mp4">
+          Your browser does not support video playback.
+        </video>
+        <div class="stage-source-badge">
+          <span class="badge-dot" style="background-color: var(--color-peach);"></span>
+          <span>${escapeHtml(sourceBadge)}</span>
+        </div>
+      </div>
+    `;
+
+    const videoEl = mediaPane.querySelector('video');
+    videoEl.addEventListener('error', () => {
+      const frame = mediaPane.querySelector('.stage-video-frame');
+      frame.innerHTML = `
+        <div class="stage-placeholder">
+          <h3>Visual Feed Connected</h3>
+          <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
+            Cloud Storage source active. Bounded frame extraction and multimodal inference operate on stored media.
+          </p>
+        </div>
+      `;
+    });
+  }
   viewportSplit.appendChild(mediaPane);
 
   // Right Pane: Live Behavioral Telemetry & Gemini Synthesis
@@ -242,11 +259,11 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   if (!latestObs) {
     telemetryPane.innerHTML = `
       <div class="stage-telemetry-header">
-        <span class="stage-telemetry-title">Live Telemetry</span>
-        <span class="badge badge-stage-monitor">Awaiting Observation</span>
+        <span class="stage-telemetry-title">Observation</span>
+        <span class="badge ${hasSource ? 'badge-stage-monitor' : 'badge-neutral'}">${hasSource ? 'Awaiting observation' : 'Source not connected'}</span>
       </div>
       <p style="color: var(--color-stage-text-subtle); font-size: var(--font-size-body); line-height: 1.5;">
-        No visual observation records saved yet. Click "Run observation now" below to sample the current frame.
+        ${hasSource ? 'No visual observation records saved yet. Click "Run observation now" below to sample the current frame.' : 'No observation can be collected until a monitoring source is connected.'}
       </p>
     `;
   } else {
@@ -299,7 +316,7 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   // Bottom Action Bar of Stage
   const bottomBar = document.createElement('div');
   bottomBar.className = 'stage-bottom-bar';
-  bottomBar.innerHTML = `
+  bottomBar.innerHTML = hasSource ? `
     <div style="display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;">
       <button id="btn-run-observation" class="btn btn-stage-primary">
         Run observation now
@@ -309,6 +326,10 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
     <div style="font-size: var(--font-size-label); color: var(--color-stage-text-muted); font-family: var(--font-mono);">
       <span>${escapeHtml(sourceInfo)}</span>
     </div>
+  ` : `
+    <span style="font-size: var(--font-size-label); color: var(--color-stage-text-muted);">
+      Monitoring actions are unavailable until a source is connected.
+    </span>
   `;
   stage.appendChild(bottomBar);
 
@@ -601,9 +622,10 @@ function createResearchModule(latestObs) {
 /**
  * 5. Daily Care Summaries Module (Open Section)
  */
-function createReportsModule(animalId, reports, onRefresh) {
+function createReportsModule(animalId, profile, reports, onRefresh) {
   const module = document.createElement('section');
   module.className = 'editorial-open-section';
+  const hasSource = hasMonitoringSource(profile);
 
   const header = document.createElement('div');
   header.className = 'editorial-section-header';
@@ -613,23 +635,29 @@ function createReportsModule(animalId, reports, onRefresh) {
   `;
   module.appendChild(header);
 
-  // Action Strip
-  const actionStrip = document.createElement('div');
-  actionStrip.style.display = 'flex';
-  actionStrip.style.justifyContent = 'space-between';
-  actionStrip.style.alignItems = 'center';
-  actionStrip.style.flexWrap = 'wrap';
-  actionStrip.style.gap = 'var(--space-3)';
-  actionStrip.style.marginBottom = 'var(--space-2)';
-  actionStrip.innerHTML = `
-    <button id="btn-generate-report" class="btn btn-secondary">
-      Generate daily report
-    </button>
-    <span style="font-size: var(--font-size-label); color: var(--color-text-muted);">
-      Synthesizes 24h structured history
-    </span>
-  `;
-  module.appendChild(actionStrip);
+  if (hasSource) {
+    const actionStrip = document.createElement('div');
+    actionStrip.style.display = 'flex';
+    actionStrip.style.justifyContent = 'space-between';
+    actionStrip.style.alignItems = 'center';
+    actionStrip.style.flexWrap = 'wrap';
+    actionStrip.style.gap = 'var(--space-3)';
+    actionStrip.style.marginBottom = 'var(--space-2)';
+    actionStrip.innerHTML = `
+      <button id="btn-generate-report" class="btn btn-secondary">
+        Generate daily report
+      </button>
+      <span style="font-size: var(--font-size-label); color: var(--color-text-muted);">
+        Synthesizes 24h structured history
+      </span>
+    `;
+    module.appendChild(actionStrip);
+  } else {
+    const sourceNotice = document.createElement('p');
+    sourceNotice.className = 'empty-inline';
+    sourceNotice.textContent = 'Daily reports are unavailable until a monitoring source is connected.';
+    module.appendChild(sourceNotice);
+  }
 
   const statusEl = document.createElement('div');
   statusEl.id = 'report-action-status';
@@ -787,4 +815,8 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function hasMonitoringSource(profile) {
+  return Boolean(profile && profile.source_type && profile.source_reference !== null && profile.source_reference !== undefined);
 }

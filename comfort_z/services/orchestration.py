@@ -32,6 +32,10 @@ DEFAULT_WINDOW_MAX_SAMPLES = 2
 MAX_WINDOW_MAX_SAMPLES = 10
 
 
+class MonitoringSourceNotConnectedError(ValueError):
+    """Raised when an operation needs a source that the profile does not have."""
+
+
 class DailyReportGenerator(Protocol):
     def generate(self, structured_history: dict) -> DailyReportNarrative:
         """Generate a report from structured records, never raw images."""
@@ -75,6 +79,9 @@ def monitor_next_window(
     profile = state.get_profile(animal_id.strip())
     if profile is None:
         raise ValueError(f"No monitoring profile exists for animal {animal_id!r}.")
+    if not profile.has_monitoring_source:
+        remaining = max(0, profile.daily_sample_budget - profile.samples_used_in_current_period)
+        return _window_result(profile, "source_not_connected", remaining)
 
     timestamp = now or datetime.now(timezone.utc)
     profile = _reset_daily_budget_if_needed(profile, timestamp)
@@ -159,6 +166,8 @@ def generate_daily_report(
     profile = state.get_profile(animal_id.strip())
     if profile is None:
         raise ValueError(f"No monitoring profile exists for animal {animal_id!r}.")
+    if not profile.has_monitoring_source:
+        raise MonitoringSourceNotConnectedError("Monitoring source is not connected.")
     timestamp = now or datetime.now(timezone.utc)
     period_start, period_end = _reporting_period(profile, timestamp)
     observation_store = observation_repository or get_repository()

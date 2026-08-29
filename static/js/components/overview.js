@@ -6,7 +6,8 @@ import { renderAnimalVisual } from './silhouettes.js';
 export function renderOverview(animals, navigate) {
   const container = document.createElement('div');
   container.className = 'overview-container';
-  const activeAnimal = animals.find((animal) => animal.active !== false) || animals[0] || null;
+  const orderedAnimals = orderAnimalsForDisplay(animals);
+  const activeAnimal = orderedAnimals.find((animal) => hasMonitoringSource(animal) && animal.active !== false) || orderedAnimals[0] || null;
 
   const heading = document.createElement('header');
   heading.className = 'overview-heading';
@@ -28,13 +29,14 @@ export function renderOverview(animals, navigate) {
     container.appendChild(empty);
   }
 
-  container.appendChild(createAnimalsSection(animals, navigate));
+  container.appendChild(createAnimalsSection(orderedAnimals, navigate));
   return container;
 }
 
 export function renderAllAnimals(animals, navigate) {
   const container = document.createElement('div');
   container.className = 'overview-container all-animals-container';
+  const orderedAnimals = orderAnimalsForDisplay(animals);
 
   const heading = document.createElement('header');
   heading.className = 'overview-heading';
@@ -43,10 +45,16 @@ export function renderAllAnimals(animals, navigate) {
       <h1>All Animals</h1>
       <p>Configured monitoring profiles and their current status.</p>
     </div>
-    <span class="overview-live-state"><span></span> ${animals.length} ${animals.length === 1 ? 'profile' : 'profiles'} loaded</span>
+    <div class="all-animals-heading-actions">
+      <span class="overview-live-state"><span></span> ${animals.length} ${animals.length === 1 ? 'profile' : 'profiles'} loaded</span>
+      <a class="all-animals-add-action" href="#/animals/new">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" /></svg>
+        <span>Add animal</span>
+      </a>
+    </div>
   `;
   container.appendChild(heading);
-  container.appendChild(createAnimalsSection(animals, navigate, { includePrototypeCards: false }));
+  container.appendChild(createAnimalsSection(orderedAnimals, navigate, { includePrototypeCards: false }));
   return container;
 }
 
@@ -62,7 +70,7 @@ function createAnimalsSection(animals, navigate, { includePrototypeCards = true 
   animals.forEach((animal) => grid.appendChild(createAnimalCard(animal, navigate)));
   if (includePrototypeCards) {
     grid.appendChild(createPreviewCard());
-    grid.appendChild(createAddAnimalCard());
+    grid.appendChild(createAddAnimalCard(navigate));
   }
   section.appendChild(grid);
   return section;
@@ -82,7 +90,7 @@ function createHero(profile, navigate) {
       <span class="visual-disclaimer">Decorative profile fallback</span>
     </div>
     <div class="animal-hero-copy">
-      <div class="animal-hero-status"><span class="status-orb ${profile.active === false ? 'is-idle' : ''}"></span>${profile.active === false ? 'Monitoring inactive' : 'Monitoring active'}</div>
+      <div class="animal-hero-status"><span class="status-orb ${profileStatusClass(profile)}"></span>${profileStatusText(profile)}</div>
       <h2>${escapeHtml(name)}</h2>
       <p class="animal-hero-species">${escapeHtml(species)}</p>
       <p class="animal-hero-goal">${escapeHtml(profile.monitoring_goal || 'Monitoring goal not recorded.')}</p>
@@ -118,7 +126,7 @@ function createAnimalCard(profile, navigate) {
   card.innerHTML = `
     <div class="animal-card-visual">${renderAnimalVisual(profile, { className: 'animal-card-silhouette', alt: `Profile of ${name}` })}</div>
     <div class="animal-card-content">
-      <span class="animal-card-status"><span class="status-orb ${profile.active === false ? 'is-idle' : ''}"></span>${profile.active === false ? 'Inactive' : 'Monitoring active'}</span>
+      <span class="animal-card-status"><span class="status-orb ${profileStatusClass(profile)}"></span>${profileStatusText(profile)}</span>
       <h3>${escapeHtml(name)}</h3>
       <p>${escapeHtml(profile.expected_species || 'Species not recorded')}</p>
       <div class="animal-card-footer">
@@ -154,24 +162,66 @@ function createPreviewCard() {
   return card;
 }
 
-function createAddAnimalCard() {
+function createAddAnimalCard(navigate) {
   const card = document.createElement('article');
   card.className = 'add-animal-card';
-  card.setAttribute('aria-disabled', 'true');
+  card.tabIndex = 0;
+  card.setAttribute('role', 'link');
+  card.setAttribute('aria-label', 'Add an animal');
   card.innerHTML = `
     <span class="add-animal-icon" aria-hidden="true">+</span>
     <h3>Add Animal</h3>
-    <p>Profile setup is not configured in this console yet.</p>
-    <span class="add-animal-state">Coming later</span>
+    <p>Save an animal profile now and connect a monitoring source later.</p>
+    <span class="add-animal-state">Start profile</span>
   `;
+  const open = () => navigate('#/animals/new');
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  });
   return card;
 }
 
 function sourceLabel(profile) {
+  if (!hasMonitoringSource(profile)) return 'Not connected';
   if (profile.source_type === 'webcam') return 'Live webcam';
   if (String(profile.source_reference || '').startsWith('gs://')) return 'Cloud video';
   if (profile.source_type === 'video') return 'Local video';
   return 'Source not recorded';
+}
+
+function hasMonitoringSource(profile) {
+  return Boolean(profile && profile.source_type && profile.source_reference !== null && profile.source_reference !== undefined);
+}
+
+function orderAnimalsForDisplay(animals) {
+  return [...animals].sort((left, right) => {
+    const priorityDifference = animalDisplayPriority(left) - animalDisplayPriority(right);
+    if (priorityDifference) return priorityDifference;
+    return animalDisplayName(left).localeCompare(animalDisplayName(right), undefined, { sensitivity: 'base' });
+  });
+}
+
+function animalDisplayPriority(profile) {
+  if (hasMonitoringSource(profile) && profile.active !== false) return 0;
+  if (!hasMonitoringSource(profile)) return 1;
+  return 2;
+}
+
+function animalDisplayName(profile) {
+  return String(profile && (profile.animal_name || profile.animal_id) || '');
+}
+
+function profileStatusText(profile) {
+  if (!hasMonitoringSource(profile)) return 'Monitoring source not connected';
+  return profile.active === false ? 'Monitoring inactive' : 'Monitoring active';
+}
+
+function profileStatusClass(profile) {
+  return !hasMonitoringSource(profile) || profile.active === false ? 'is-idle' : '';
 }
 
 function escapeHtml(value) {

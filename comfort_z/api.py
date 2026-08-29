@@ -9,12 +9,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from comfort_z.agent import root_agent
 from comfort_z.models import DirectEnvironmentReading, MonitoringProfile, MonitoringSourceType
 from comfort_z.services.repository import ObservationRepositoryError, get_monitoring_state_repository
+from comfort_z.services.orchestration import MonitoringSourceNotConnectedError
 from comfort_z.tools.monitoring import (
     create_monitoring_profile,
     generate_daily_report,
@@ -48,8 +49,8 @@ class MonitorRequest(BaseModel):
 class MonitoringProfileRequest(BaseModel):
     animal_id: str = Field(min_length=1)
     monitoring_goal: str = Field(min_length=1)
-    source_reference: str | int
-    source_type: MonitoringSourceType
+    source_reference: str | int | None = None
+    source_type: MonitoringSourceType | None = None
     normal_sampling_interval_seconds: float = Field(default=300.0, gt=0)
     elevated_sampling_interval_seconds: float = Field(default=60.0, gt=0)
     daily_sample_budget: int = Field(default=24, gt=0)
@@ -63,6 +64,18 @@ class MonitoringProfileRequest(BaseModel):
     report_time: str = "08:00"
     timezone: str = "UTC"
 
+    @model_validator(mode="after")
+    def validate_source_connection(self) -> "MonitoringProfileRequest":
+        if isinstance(self.source_reference, str) and not self.source_reference.strip():
+            raise ValueError("source_reference cannot be empty when provided.")
+        has_reference = self.source_reference is not None
+        has_type = self.source_type is not None
+        if has_reference != has_type:
+            raise ValueError(
+                "source_reference and source_type must be provided together or both omitted."
+            )
+        return self
+
 
 class NextWindowRequest(BaseModel):
     window_max_samples: int = Field(default=2, ge=1, le=10)
@@ -71,6 +84,8 @@ class NextWindowRequest(BaseModel):
 def _workflow_http_error(error: Exception) -> HTTPException:
     """Return actionable but non-sensitive workflow failures to API callers."""
     logger.warning("Comfort-z workflow request failed: %s", type(error).__name__)
+    if isinstance(error, MonitoringSourceNotConnectedError):
+        return HTTPException(status_code=409, detail="Monitoring source is not connected.")
     if isinstance(error, (ValueError, FileNotFoundError)):
         return HTTPException(status_code=400, detail="Invalid monitoring input.")
     if isinstance(error, ObservationRepositoryError):

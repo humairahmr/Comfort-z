@@ -5,6 +5,7 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { renderAllAnimals, renderOverview } from './components/overview.js';
+import { renderAddAnimalOnboarding } from './components/onboarding.js';
 import { renderDashboard } from './components/dashboard.js';
 
 const appRoot = document.getElementById('app-root');
@@ -47,7 +48,7 @@ function updateNavActive(hash) {
   });
 
   let activeRoute = 'overview';
-  if (hash === '#/animals') {
+  if (hash === '#/animals' || hash === '#/animals/new') {
     activeRoute = 'animals';
   } else if (hash.startsWith('#/animals/')) {
     activeRoute = 'monitoring';
@@ -73,7 +74,9 @@ async function handleRoute() {
   `;
 
   try {
-    if (hash.startsWith('#/animals/')) {
+    if (hash === '#/animals/new') {
+      loadAddAnimalRoute();
+    } else if (hash.startsWith('#/animals/')) {
       const rawId = hash.replace('#/animals/', '').split('#')[0].trim();
       const animalId = decodeURIComponent(rawId);
       await loadDashboardRoute(animalId);
@@ -85,6 +88,11 @@ async function handleRoute() {
   } catch (err) {
     renderError('Failed to load data from Comfort-z backend', err.message);
   }
+}
+
+function loadAddAnimalRoute() {
+  appRoot.innerHTML = '';
+  appRoot.appendChild(renderAddAnimalOnboarding(navigate));
 }
 
 async function loadOverviewRoute() {

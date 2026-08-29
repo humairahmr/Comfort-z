@@ -59,6 +59,16 @@ export class ApiClient {
   }
 
   /**
+   * Save an animal's monitoring profile without starting a monitoring window.
+   */
+  async createMonitoringProfile(profile) {
+    return this.fetchJson('/monitoring/profiles', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    });
+  }
+
+  /**
    * Retrieve one animal's saved monitoring profile.
    */
   async getProfile(animalId) {

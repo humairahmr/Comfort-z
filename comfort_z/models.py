@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class Severity(str, Enum):
     NORMAL = "normal"
@@ -202,8 +202,8 @@ class MonitoringProfile(BaseModel):
     enclosure_type: str | None = None
     direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
     monitoring_goal: str = Field(min_length=1)
-    source_reference: str | int
-    source_type: MonitoringSourceType
+    source_reference: str | int | None = None
+    source_type: MonitoringSourceType | None = None
     normal_sampling_interval_seconds: float = Field(gt=0)
     elevated_sampling_interval_seconds: float = Field(gt=0)
     current_sampling_mode: SamplingMode = SamplingMode.NORMAL
@@ -219,6 +219,24 @@ class MonitoringProfile(BaseModel):
     last_monitoring_run: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def validate_source_connection(self) -> "MonitoringProfile":
+        """A source is either fully configured or intentionally absent."""
+        if isinstance(self.source_reference, str) and not self.source_reference.strip():
+            raise ValueError("source_reference cannot be empty when provided.")
+        has_reference = self.source_reference is not None
+        has_type = self.source_type is not None
+        if has_reference != has_type:
+            raise ValueError(
+                "source_reference and source_type must be provided together or both omitted."
+            )
+        return self
+
+    @property
+    def has_monitoring_source(self) -> bool:
+        """Derived source state; it is never persisted as mutable profile data."""
+        return self.source_reference is not None and self.source_type is not None
 
 
 class DailyReportNarrative(BaseModel):

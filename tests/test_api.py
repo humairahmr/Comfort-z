@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from comfort_z import api
 
@@ -114,6 +115,77 @@ def test_monitoring_profile_and_bounded_window_endpoints_delegate_to_tools(monke
     assert received["direct_environment_readings"][0]["source"] == "owner"
     assert window.status_code == 200
     assert window.json()["window_max_samples"] == 2
+
+
+def test_source_less_profile_request_is_accepted_and_source_fields_are_omitted(monkeypatch):
+    received = {}
+
+    def save_profile(**kwargs):
+        received.update(kwargs)
+        return {"animal_id": kwargs["animal_id"], "active": True, "source_reference": None, "source_type": None}
+
+    monkeypatch.setattr(api, "create_monitoring_profile", save_profile)
+    response = TestClient(api.app).post(
+        "/monitoring/profiles",
+        json={"animal_id": "milo-a1b2c3", "animal_name": "Milo", "monitoring_goal": "Keep an eye on Milo."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_reference"] is None
+    assert response.json()["source_type"] is None
+    assert received["source_reference"] is None
+    assert received["source_type"] is None
+
+
+def test_list_animals_includes_a_source_less_profile(monkeypatch):
+    class FakeProfile:
+        def model_dump(self, mode=None):
+            return {
+                "animal_id": "milo-a1b2c3",
+                "animal_name": "Milo",
+                "monitoring_goal": "Keep an eye on Milo.",
+                "source_reference": None,
+                "source_type": None,
+                "active": True,
+            }
+
+    class FakeRepo:
+        def list_profiles(self):
+            return [FakeProfile()]
+
+    monkeypatch.setattr(api, "get_monitoring_state_repository", lambda: FakeRepo())
+    response = TestClient(api.app).get("/animals")
+
+    assert response.status_code == 200
+    assert response.json()[0]["source_reference"] is None
+    assert response.json()[0]["source_type"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"source_reference": "milo.mp4"},
+        {"source_type": "video"},
+    ],
+)
+def test_profile_request_rejects_an_unpaired_source_field(payload):
+    body = {"animal_id": "milo", "monitoring_goal": "Keep an eye on Milo."}
+    body.update(payload)
+
+    response = TestClient(api.app).post("/monitoring/profiles", json=body)
+
+    assert response.status_code == 422
+
+
+def test_source_less_daily_report_error_is_mapped_cleanly(monkeypatch):
+    def source_not_connected(_animal_id):
+        raise api.MonitoringSourceNotConnectedError("internal detail")
+
+    monkeypatch.setattr(api, "generate_daily_report", source_not_connected)
+    response = TestClient(api.app).post("/monitoring/milo/daily-report")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Monitoring source is not connected."}
 
 
 def test_daily_report_endpoints_delegate_to_existing_orchestration_tools(monkeypatch):

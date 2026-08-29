@@ -1,6 +1,9 @@
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 
+import pytest
+from pydantic import ValidationError
+
 from comfort_z.models import (
     DailyReportNarrative,
     DirectEnvironmentReading,
@@ -16,6 +19,7 @@ from comfort_z.models import (
     VideoMonitoringSession,
 )
 from comfort_z.services.orchestration import (
+    MonitoringSourceNotConnectedError,
     create_or_update_monitoring_profile,
     generate_daily_report,
     monitor_next_window,
@@ -101,6 +105,54 @@ def test_inactive_profile_exits_without_opening_source(tmp_path):
 
     assert result.ended_reason == "inactive"
     assert video.calls == []
+
+
+def test_source_less_profile_is_valid_but_one_source_field_is_rejected():
+    source_less = profile(source_reference=None, source_type=None)
+
+    assert not source_less.has_monitoring_source
+
+    with pytest.raises(ValidationError):
+        profile(source_reference="Raku.mp4", source_type=None)
+    with pytest.raises(ValidationError):
+        profile(source_reference=None, source_type=MonitoringSourceType.VIDEO)
+
+
+def test_source_less_profile_exits_before_environment_source_or_video_work(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    original = profile(
+        source_reference=None,
+        source_type=None,
+        samples_used_in_current_period=2,
+        source_cursor_seconds=12.5,
+        source_cursor_frame_index=42,
+    )
+    repository.save_profile(original)
+    video = RecordingVideoService([])
+    provider = RecordingEnvironmentProvider(error=AssertionError("weather must not be called"))
+
+    def resolver(_source):
+        raise AssertionError("source resolver must not be called")
+
+    result = monitor_next_window(
+        "raku",
+        state_repository=repository,
+        video_service=video,
+        source_resolver=resolver,
+        environment_provider=provider,
+    )
+    saved = repository.get_profile("raku")
+
+    assert result.ended_reason == "source_not_connected"
+    assert result.session is None
+    assert video.calls == []
+    assert provider.calls == []
+    assert saved is not None
+    assert saved.samples_used_in_current_period == original.samples_used_in_current_period
+    assert saved.source_cursor_seconds == original.source_cursor_seconds
+    assert saved.source_cursor_frame_index == original.source_cursor_frame_index
+    assert saved.current_sampling_mode == original.current_sampling_mode
+    assert saved.last_monitoring_run == original.last_monitoring_run
 
 
 def test_next_window_resumes_from_persisted_cursor_and_is_bounded(tmp_path):
@@ -350,3 +402,20 @@ def test_daily_report_uses_only_valid_behavioral_history_and_persists(tmp_path):
     assert len(report.concerning_observation_ids) == 1
     assert len(report.alert_observation_ids) == 1
     assert repository.recent_reports("raku")[0].report_id == report.report_id
+
+
+def test_source_less_profile_cannot_generate_or_persist_a_daily_report(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    repository.save_profile(profile(source_reference=None, source_type=None))
+    generator = CapturingReportGenerator()
+
+    with pytest.raises(MonitoringSourceNotConnectedError):
+        generate_daily_report(
+            "raku",
+            state_repository=repository,
+            observation_repository=MemoryObservationRepository([]),
+            report_generator=generator,
+        )
+
+    assert generator.payload is None
+    assert repository.recent_reports("raku") == []

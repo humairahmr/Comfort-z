@@ -87,8 +87,8 @@ def get_recent_observations(animal_id: str, limit: int = 5) -> list[dict]:
 def create_monitoring_profile(
     animal_id: str,
     monitoring_goal: str,
-    source_reference: str | int,
-    source_type: str,
+    source_reference: str | int | None = None,
+    source_type: str | None = None,
     normal_sampling_interval_seconds: float = 300.0,
     elevated_sampling_interval_seconds: float = 60.0,
     daily_sample_budget: int = 24,
