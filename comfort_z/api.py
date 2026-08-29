@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -23,7 +26,13 @@ from comfort_z.tools.monitoring import (
 
 logger = logging.getLogger(__name__)
 
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+DEMO_VIDEOS_DIR = Path(__file__).resolve().parent.parent / "demo_videos"
+
 app = FastAPI(title="Comfort-z", version="0.1.0")
+
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class MonitorRequest(BaseModel):
@@ -67,6 +76,40 @@ def _workflow_http_error(error: Exception) -> HTTPException:
     if isinstance(error, ObservationRepositoryError):
         return HTTPException(status_code=503, detail="Observation storage is unavailable.")
     return HTTPException(status_code=502, detail="Monitoring analysis is temporarily unavailable.")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    """Serve the single-page application frontend shell if present."""
+    index_path = STATIC_DIR / "index.html"
+    if index_path.is_file():
+        return FileResponse(index_path)
+    return HTMLResponse(
+        "<!DOCTYPE html><html><head><title>Comfort-z</title></head>"
+        "<body><h1>Comfort-z</h1><p>Frontend is initializing.</p></body></html>"
+    )
+
+
+@app.get("/demo-video/{filename}")
+async def demo_video(filename: str):
+    """Safely serve local demonstration videos if present, without failing if absent."""
+    safe_filename = Path(filename).name
+    video_path = DEMO_VIDEOS_DIR / safe_filename
+    if not video_path.is_file():
+        raise HTTPException(status_code=404, detail="Demo video not available.")
+    return FileResponse(video_path, media_type="video/mp4")
+
+
+@app.get("/animals")
+async def list_animals() -> list[dict]:
+    """Return all saved monitoring profiles."""
+    try:
+        profiles = await run_in_threadpool(
+            lambda: get_monitoring_state_repository().list_profiles()
+        )
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    return [profile.model_dump(mode="json") for profile in profiles]
 
 
 @app.get("/health")

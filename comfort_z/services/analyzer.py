@@ -95,8 +95,7 @@ class GeminiDailyReportGenerator:
     def generate(self, structured_history: dict) -> DailyReportNarrative:
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[_REPORT_PROMPT + "\n\n" + _OUTDOOR_CONTEXT_PROMPT, structured_history],
-            config=types.GenerateContentConfig(
+            contents=[_REPORT_PROMPT + "\n\n" + _OUTDOOR_CONTEXT_PROMPT, history_json],
                 response_mime_type="application/json",
                 response_schema=DailyReportNarrative,
                 temperature=0.1,

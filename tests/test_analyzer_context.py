@@ -65,3 +65,40 @@ def test_outdoor_context_is_explicitly_not_treated_as_enclosure_data(tmp_path):
     assert "must never be treated as the temperature" in model.contents[0]
     assert "Outdoor/local weather context" in model.contents[0]
     assert "water_temperature" in model.contents[0]
+
+
+def test_gemini_daily_report_generator_serializes_structured_history_to_json():
+    from comfort_z.services.analyzer import GeminiDailyReportGenerator
+
+    captured_kwargs = {}
+
+    def fake_generate_content(**kwargs):
+        captured_kwargs.update(kwargs)
+        return SimpleNamespace(
+            text="""{
+                "overall_activity_behavior": "Animal was monitored over 24h.",
+                "notable_changes": [],
+                "concerning_observations": [],
+                "visibility_data_quality_limitations": "Limited camera angle.",
+                "comparison_with_prior_observations": "Consistent with previous records.",
+                "recommended_action": "Continue normal monitoring routine."
+            }"""
+        )
+
+    generator = GeminiDailyReportGenerator.__new__(GeminiDailyReportGenerator)
+    generator.model = "gemini-3.5-flash"
+    generator.client = SimpleNamespace(models=SimpleNamespace(generate_content=fake_generate_content))
+
+    structured_history = {
+        "animal": {"animal_id": "raku", "animal_name": "Raku"},
+        "counts": {"valid": 2, "concerning": 0},
+    }
+    narrative = generator.generate(structured_history)
+
+    assert "contents" in captured_kwargs
+    contents = captured_kwargs["contents"]
+    assert len(contents) == 2
+    assert isinstance(contents[1], str)
+    assert not isinstance(contents[1], dict)
+    assert '"animal_id": "raku"' in contents[1]
+    assert narrative.overall_activity_behavior == "Animal was monitored over 24h."

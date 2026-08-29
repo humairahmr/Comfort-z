@@ -138,6 +138,10 @@ class MonitoringStateRepository(ABC):
         """Return one animal's profile when it exists."""
 
     @abstractmethod
+    def list_profiles(self) -> list[MonitoringProfile]:
+        """Return all saved monitoring profiles."""
+
+    @abstractmethod
     def save_report(self, report: DailyMonitoringReport) -> DailyMonitoringReport:
         """Persist a generated daily report."""
 
@@ -174,6 +178,10 @@ class LocalJsonMonitoringStateRepository(MonitoringStateRepository):
     def get_profile(self, animal_id: str) -> MonitoringProfile | None:
         raw = self._read()["profiles"].get(animal_id)
         return MonitoringProfile.model_validate(raw) if raw else None
+
+    def list_profiles(self) -> list[MonitoringProfile]:
+        raw_profiles = self._read()["profiles"].values()
+        return [MonitoringProfile.model_validate(item) for item in raw_profiles]
 
     def save_report(self, report: DailyMonitoringReport) -> DailyMonitoringReport:
         payload = self._read()
@@ -241,6 +249,25 @@ class FirestoreMonitoringStateRepository(MonitoringStateRepository):
         except Exception as error:
             raise ObservationRepositoryError(
                 f"Could not retrieve monitoring profile for animal {animal_id}. "
+                "Check network and Firestore permissions."
+            ) from error
+
+    def list_profiles(self) -> list[MonitoringProfile]:
+        try:
+            profiles: list[MonitoringProfile] = []
+            for doc in self.animals.stream():
+                animal_id = getattr(doc, "id", None) or (doc.to_dict() or {}).get("animal_id")
+                if not animal_id:
+                    continue
+                profile = self.get_profile(animal_id)
+                if profile is not None:
+                    profiles.append(profile)
+            return profiles
+        except Exception as error:
+            if isinstance(error, ObservationRepositoryError):
+                raise
+            raise ObservationRepositoryError(
+                "Could not retrieve monitoring profiles from Firestore. "
                 "Check network and Firestore permissions."
             ) from error
 

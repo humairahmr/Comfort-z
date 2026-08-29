@@ -136,3 +136,46 @@ def test_daily_report_endpoints_delegate_to_existing_orchestration_tools(monkeyp
     assert generated.json()["report_id"] == "report-1"
     assert history.status_code == 200
     assert history.json() == [{"animal_id": "raku", "limit": 3}]
+
+
+def test_list_animals_endpoint_delegates_to_state_repository(monkeypatch):
+    class FakeProfile:
+        def model_dump(self, mode=None):
+            return {
+                "animal_id": "raku",
+                "animal_name": "Raku",
+                "expected_species": "Betta splendens",
+                "active": True,
+            }
+
+    class FakeRepo:
+        def list_profiles(self):
+            return [FakeProfile()]
+
+    monkeypatch.setattr(api, "get_monitoring_state_repository", lambda: FakeRepo())
+    client = TestClient(api.app)
+    response = client.get("/animals")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "animal_id": "raku",
+            "animal_name": "Raku",
+            "expected_species": "Betta splendens",
+            "active": True,
+        }
+    ]
+
+
+def test_root_index_serves_html():
+    client = TestClient(api.app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+
+
+def test_demo_video_handles_missing_safely():
+    client = TestClient(api.app)
+    response = client.get("/demo-video/non_existent_video_file.mp4")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Demo video not available."

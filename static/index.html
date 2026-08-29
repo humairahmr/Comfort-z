@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comfort-z | Autonomous Animal Care Monitoring</title>
+  <link rel="stylesheet" href="/static/css/variables.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand-block" id="brand-home" title="Comfort-z Home">
+        <div class="brand-icon">🐠</div>
+        <div class="brand-text">
+          <h1>Comfort-z</h1>
+          <span>Autonomous Animal Care Monitoring</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="status-chip" title="Active Google ADK Agent & Backend Store">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="health-agent">comfort_z (gemini-3.5-flash)</span>
+          <span>•</span>
+          <span id="health-store" style="text-transform: capitalize;">Local</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-content" id="app-root">
+    <!-- Rendered dynamically by static/js/app.js -->
+  </main>
+
+  <footer class="app-footer">
+    <p>Comfort-z is an evidence-based behavioral monitoring agent built for the Google All Things Agentic Hackathon.</p>
+    <p style="margin-top: 2px; font-size: 0.7rem; color: var(--color-text-muted);">
+      Non-diagnostic animal care monitoring • Powered by Google ADK, Gemini 3.5 Flash, and Cloud Run
+    </p>
+  </footer>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
+

@@ -65,7 +65,10 @@ class FakeCollection:
 
     def stream(self):
         values = [document.data for document in self.documents.values() if document.data]
-        ordered = sorted(values, key=lambda value: value["timestamp"], reverse=True)
+        if any("timestamp" in val for val in values):
+            ordered = sorted(values, key=lambda value: value.get("timestamp", ""), reverse=True)
+        else:
+            ordered = values
         return [FakeSnapshot(value) for value in ordered[: self._limit]]
 
 
@@ -170,6 +173,11 @@ def test_firestore_monitoring_profile_uses_animal_monitoring_subcollection():
     assert stored["monitoring_goal"] == "Keep an eye on Raku."
     assert loaded is not None
     assert loaded.source_reference == "Raku.mp4"
+
+    profiles = repository.list_profiles()
+    assert len(profiles) == 1
+    assert profiles[0].animal_id == "raku"
+
 
 
 def test_repository_selection_defaults_to_local_and_firestore_is_explicit(monkeypatch, tmp_path):
