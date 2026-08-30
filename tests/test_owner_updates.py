@@ -96,6 +96,27 @@ def test_local_owner_updates_are_backward_compatible_and_bounded(tmp_path):
     assert "owner_updates" in repository._read()
 
 
+def test_recent_owner_updates_use_recorded_time_so_backdated_entries_remain_visible(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    earlier_recorded = update(
+        occurred_at=NOW - timedelta(days=1),
+        recorded_at=NOW - timedelta(minutes=10),
+        note="Fed yesterday.",
+    )
+    backdated_but_newly_recorded = update(
+        occurred_at=NOW - timedelta(days=6),
+        recorded_at=NOW,
+        note="Recorded a past water change today.",
+    )
+
+    repository.save_owner_update(earlier_recorded)
+    repository.save_owner_update(backdated_but_newly_recorded)
+
+    assert [item.owner_update_id for item in repository.recent_owner_updates("raku", limit=1)] == [
+        backdated_but_newly_recorded.owner_update_id
+    ]
+
+
 def test_owner_updates_work_for_source_less_profiles_without_mutating_monitoring_state(tmp_path):
     repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
     saved_profile = profile(
@@ -239,12 +260,22 @@ class FakeDocument:
     def __init__(self):
         self.children = {}
         self.saved = None
+        self.data = None
 
     def collection(self, name):
         return self.children.setdefault(name, FakeCollection())
 
     def set(self, payload, merge=False):
         self.saved = (payload, merge)
+        self.data = payload
+
+
+class FakeSnapshot:
+    def __init__(self, data):
+        self._data = data
+
+    def to_dict(self):
+        return self._data
 
 
 class FakeCollection:
@@ -253,6 +284,13 @@ class FakeCollection:
 
     def document(self, name):
         return self.documents.setdefault(name, FakeDocument())
+
+    def stream(self):
+        return [
+            FakeSnapshot(document.data)
+            for document in self.documents.values()
+            if document.data is not None
+        ]
 
 
 def test_firestore_owner_update_uses_animal_subcollection_without_credentials():
@@ -268,3 +306,46 @@ def test_firestore_owner_update_uses_animal_subcollection_without_credentials():
     ).saved
     assert saved[0]["owner_update_id"] == owner_update.owner_update_id
     assert saved[1] is False
+    assert isinstance(saved[0]["occurred_at"], datetime)
+    assert isinstance(saved[0]["recorded_at"], datetime)
+
+
+def test_firestore_owner_updates_mix_native_and_legacy_timestamps_safely():
+    repository = FirestoreMonitoringStateRepository.__new__(FirestoreMonitoringStateRepository)
+    repository.animals = FakeCollection()
+    repository._firestore = SimpleNamespace(Query=SimpleNamespace(DESCENDING="DESCENDING"))
+    native = update(
+        occurred_at=NOW,
+        recorded_at=NOW - timedelta(minutes=5),
+        note="Fed today.",
+    )
+    legacy = update(
+        occurred_at=NOW - timedelta(days=3),
+        recorded_at=NOW,
+        note="Entered a backdated care event now.",
+    )
+    outside_period = update(
+        occurred_at=NOW + timedelta(seconds=1),
+        recorded_at=NOW - timedelta(minutes=10),
+        note="A later event outside the requested report period.",
+    )
+
+    repository.save_owner_update(native)
+    repository.animals.document("raku").collection("owner_updates").document(
+        legacy.owner_update_id
+    ).set(legacy.model_dump(mode="json"))
+    repository.save_owner_update(outside_period)
+
+    recent = repository.recent_owner_updates("raku", limit=2)
+    period = repository.owner_updates_for_period(
+        "raku",
+        NOW - timedelta(days=3),
+        NOW,
+        limit=10,
+    )
+
+    assert [item.owner_update_id for item in recent] == [legacy.owner_update_id, native.owner_update_id]
+    assert {item.owner_update_id for item in period} == {
+        native.owner_update_id,
+        legacy.owner_update_id,
+    }

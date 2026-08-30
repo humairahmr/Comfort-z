@@ -123,7 +123,7 @@ async function loadDashboardRoute(animalId) {
       api.getProfile(animalId).catch(() => null),
       api.getObservations(animalId, 10).catch(() => []),
       api.getReports(animalId, 5).catch(() => []),
-      api.getOwnerUpdates(animalId, 5).catch(() => []),
+      api.getOwnerUpdates(animalId, 20).catch(() => []),
     ]);
 
     state.selectedAnimalId = animalId;
@@ -142,8 +142,11 @@ async function loadDashboardRoute(animalId) {
           nextOwnerUpdates,
           navigate,
           () => loadDashboardRoute(animalId),
-          async () => {
-            const refreshedUpdates = await api.getOwnerUpdates(animalId, 5);
+          async (savedOwnerUpdateId = null) => {
+            const refreshedUpdates = await api.getOwnerUpdates(animalId, 20);
+            if (savedOwnerUpdateId && !refreshedUpdates.some((update) => update.owner_update_id === savedOwnerUpdateId)) {
+              throw new Error('Update was saved, but Care updates could not be refreshed. Please use Refresh updates; do not submit it again.');
+            }
             renderWithOwnerUpdates(refreshedUpdates);
           }
         )

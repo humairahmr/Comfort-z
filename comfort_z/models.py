@@ -86,6 +86,8 @@ class ResearchContext(BaseModel):
     result: ResearchResult | None = None
     failure: str | None = None
     reused_from_observation_id: str | None = None
+    # Owner updates are context only, never research-triggering visual evidence.
+    owner_update_ids: list[str] = Field(default_factory=list)
 
 
 class DirectEnvironmentReading(BaseModel):

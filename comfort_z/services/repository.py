@@ -230,7 +230,7 @@ class LocalJsonMonitoringStateRepository(MonitoringStateRepository):
             OwnerUpdate.model_validate(item)
             for item in self._read()["owner_updates"].get(animal_id, [])
         ]
-        return sorted(updates, key=lambda item: item.occurred_at, reverse=True)[:limit]
+        return sorted(updates, key=lambda item: item.recorded_at, reverse=True)[:limit]
 
     def owner_updates_for_period(
         self,
@@ -349,9 +349,14 @@ class FirestoreMonitoringStateRepository(MonitoringStateRepository):
 
     def save_owner_update(self, update: OwnerUpdate) -> OwnerUpdate:
         try:
+            # Keep the two top-level event timestamps queryable as Firestore timestamps.
+            # Nested readings remain JSON-compatible, matching the existing model shape.
+            payload = update.model_dump(mode="json")
+            payload["occurred_at"] = update.occurred_at
+            payload["recorded_at"] = update.recorded_at
             self._animal_document(update.animal_id).collection("owner_updates").document(
                 update.owner_update_id
-            ).set(update.model_dump(mode="json"))
+            ).set(payload)
         except Exception as error:
             raise ObservationRepositoryError(
                 f"Could not save owner update {update.owner_update_id} for animal "
@@ -360,14 +365,18 @@ class FirestoreMonitoringStateRepository(MonitoringStateRepository):
         return update
 
     def recent_owner_updates(self, animal_id: str, limit: int = 20) -> list[OwnerUpdate]:
+        """Order by record time while accepting legacy ISO-string documents.
+
+        Firestore sorts strings and Timestamp values in separate type groups. Streaming the
+        one animal's small owner-update collection and sorting parsed records locally is the
+        smallest compatibility path that cannot hide legacy updates behind newer timestamps.
+        """
         try:
-            query = (
-                self._animal_document(animal_id)
-                .collection("owner_updates")
-                .order_by("occurred_at", direction=self._firestore.Query.DESCENDING)
-                .limit(limit)
-            )
-            return [OwnerUpdate.model_validate(doc.to_dict()) for doc in query.stream()]
+            updates = [
+                OwnerUpdate.model_validate(doc.to_dict())
+                for doc in self._animal_document(animal_id).collection("owner_updates").stream()
+            ]
+            return sorted(updates, key=lambda item: item.recorded_at, reverse=True)[:limit]
         except Exception as error:
             raise ObservationRepositoryError(
                 f"Could not retrieve owner updates for animal {animal_id}. "
@@ -381,16 +390,14 @@ class FirestoreMonitoringStateRepository(MonitoringStateRepository):
         end: datetime,
         limit: int,
     ) -> list[OwnerUpdate]:
+        """Filter parsed records locally so legacy strings and native timestamps coexist."""
         try:
-            query = (
-                self._animal_document(animal_id)
-                .collection("owner_updates")
-                .where("occurred_at", ">=", start.isoformat())
-                .where("occurred_at", "<=", end.isoformat())
-                .order_by("occurred_at", direction=self._firestore.Query.DESCENDING)
-                .limit(limit)
-            )
-            return [OwnerUpdate.model_validate(doc.to_dict()) for doc in query.stream()]
+            updates = [
+                OwnerUpdate.model_validate(doc.to_dict())
+                for doc in self._animal_document(animal_id).collection("owner_updates").stream()
+            ]
+            matching = [item for item in updates if start <= item.occurred_at <= end]
+            return sorted(matching, key=lambda item: item.occurred_at, reverse=True)[:limit]
         except Exception as error:
             raise ObservationRepositoryError(
                 f"Could not retrieve owner-update context for animal {animal_id}. "

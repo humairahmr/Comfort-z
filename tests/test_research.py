@@ -8,6 +8,8 @@ from comfort_z.models import (
     MonitoringProfile,
     MonitoringSourceType,
     ObservationStatus,
+    OwnerUpdate,
+    OwnerUpdateCategory,
     ResearchContext,
     ResearchDecision,
     ResearchResult,
@@ -18,7 +20,7 @@ from comfort_z.models import (
     Trend,
 )
 from comfort_z.services.orchestration import generate_daily_report
-from comfort_z.services.research import decide_research, evaluate_research
+from comfort_z.services.research import decide_research, evaluate_research, maybe_research
 from comfort_z.services.repository import (
     LocalJsonMonitoringStateRepository,
     LocalJsonObservationRepository,
@@ -186,6 +188,46 @@ class FakeResearchProvider:
                 evidence="Continue clear observation and obtain professional advice if signs persist.",
             )
         ]
+
+
+def test_research_uses_bounded_owner_context_only_after_visual_trigger():
+    provider = FakeResearchProvider()
+    owner_updates = [
+        OwnerUpdate(
+            animal_id="raku",
+            category=OwnerUpdateCategory.APPETITE,
+            note=f"Owner-reported appetite note {index}.",
+            occurred_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        )
+        for index in range(10)
+    ]
+    normal = make_observation(severity=Severity.NORMAL)
+
+    not_needed = maybe_research(
+        normal,
+        [],
+        trend=Trend.FIRST_OBSERVATION,
+        alert_status=False,
+        provider=provider,
+        owner_updates=owner_updates,
+    )
+    needed = maybe_research(
+        make_observation(severity=Severity.CONCERNING),
+        [],
+        trend=Trend.WORSENING,
+        alert_status=False,
+        provider=provider,
+        owner_updates=owner_updates,
+    )
+
+    assert not not_needed.decision.needed
+    assert not_needed.owner_update_ids == []
+    assert len(provider.calls) == 1
+    query, max_sources = provider.calls[0]
+    assert max_sources == 5
+    assert "OWNER-REPORTED / UNVERIFIED CONTEXT" in query
+    assert "not visual evidence" in query
+    assert len(needed.owner_update_ids) == 8
 
 
 def visual(severity):

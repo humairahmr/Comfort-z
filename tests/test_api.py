@@ -93,6 +93,7 @@ def test_owner_update_endpoints_are_separate_from_monitoring_tools(monkeypatch):
     listed = client.get("/animals/milo/owner-updates?limit=7")
 
     assert created.status_code == 200
+    assert created.json()["owner_update_id"] == "update-1"
     assert received["animal_id"] == "milo"
     assert received["category"] == "feeding"
     assert received["input_method"] == "typed"

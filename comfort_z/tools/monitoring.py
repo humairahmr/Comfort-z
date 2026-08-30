@@ -70,6 +70,7 @@ def monitor_animal(
         trend=decision.trend,
         alert_status=decision.alert_status,
         provider=get_research_provider(),
+        owner_updates=owner_updates,
     )
     current = current.model_copy(
         update={

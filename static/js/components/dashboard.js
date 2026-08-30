@@ -142,7 +142,11 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
       </div>
       <div class="owner-update-actions">
         <span class="owner-update-message" role="status" aria-live="polite"></span>
-        <button type="submit" class="btn btn-primary">Save update</button>
+        <div class="owner-update-action-buttons">
+          <button type="button" class="btn btn-secondary owner-update-cancel">Cancel</button>
+          <button type="button" class="btn btn-secondary owner-update-refresh" hidden>Refresh updates</button>
+          <button type="submit" class="btn btn-primary">Save update</button>
+        </div>
       </div>
     </form>
     <div class="owner-update-list">
@@ -159,6 +163,8 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
   const readingFields = section.querySelector('.owner-update-reading-fields');
   const message = section.querySelector('.owner-update-message');
   const submit = form.querySelector('[type="submit"]');
+  const cancel = section.querySelector('.owner-update-cancel');
+  const refresh = section.querySelector('.owner-update-refresh');
 
   const updateFieldVisibility = () => {
     const measurement = category.value === 'measurement';
@@ -170,20 +176,43 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
     form.elements.reading_unit.required = measurement;
   };
 
-  toggle.addEventListener('click', () => {
-    const willOpen = form.hidden;
-    form.hidden = !willOpen;
-    toggle.setAttribute('aria-expanded', String(willOpen));
-    toggle.textContent = willOpen ? 'Close update form' : 'Add update';
-    if (willOpen) form.elements.category.focus();
-  });
+  let saving = false;
+  let savedButRefreshFailed = false;
+  let savedOwnerUpdateId = null;
+
+  const setFormOpen = (open, { reset = false } = {}) => {
+    form.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? 'Close update' : 'Add update';
+    if (reset) {
+      form.reset();
+      updateFieldVisibility();
+      if (!savedButRefreshFailed) {
+        message.textContent = '';
+        delete message.dataset.state;
+        refresh.hidden = true;
+      }
+    }
+    if (open) form.elements.category.focus();
+  };
+
+  toggle.addEventListener('click', () => setFormOpen(form.hidden, { reset: !form.hidden }));
+  cancel.addEventListener('click', () => setFormOpen(false, { reset: true }));
   category.addEventListener('change', updateFieldVisibility);
   updateFieldVisibility();
 
-  let saving = false;
+  const refreshSavedUpdate = async (savedOwnerUpdateId = null) => {
+    if (typeof onOwnerUpdatesRefresh !== 'function') {
+      throw new Error('Update was saved, but Care updates cannot refresh on this page.');
+    }
+    await onOwnerUpdatesRefresh(savedOwnerUpdateId);
+    savedButRefreshFailed = false;
+    setFormOpen(false, { reset: true });
+  };
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (saving) return;
+    if (saving || savedButRefreshFailed) return;
     const isMeasurement = category.value === 'measurement';
     const occurredAt = form.elements.occurred_at.value;
     const note = form.elements.note.value.trim();
@@ -213,21 +242,45 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
     }
 
     saving = true;
+    let postPersisted = false;
     submit.disabled = true;
     message.textContent = 'Saving owner update…';
     message.dataset.state = 'pending';
     try {
-      await api.createOwnerUpdate(animalId, payload);
+      const saved = await api.createOwnerUpdate(animalId, payload);
+      postPersisted = true;
+      savedOwnerUpdateId = saved.owner_update_id;
       message.textContent = 'Saved. Refreshing care updates…';
       message.dataset.state = 'success';
-      if (typeof onOwnerUpdatesRefresh === 'function') {
-        await onOwnerUpdatesRefresh();
-      }
+      await refreshSavedUpdate(saved.owner_update_id);
     } catch (error) {
-      message.textContent = error.message || 'Unable to save this update.';
+      if (postPersisted || error.mayHavePersisted) {
+        savedButRefreshFailed = true;
+        submit.disabled = true;
+        refresh.hidden = false;
+        message.textContent = error.message || 'Update was saved, but Care updates could not refresh.';
+      } else {
+        message.textContent = error.message || 'Unable to save this update.';
+      }
       message.dataset.state = 'error';
       saving = false;
-      submit.disabled = false;
+      if (!savedButRefreshFailed) submit.disabled = false;
+    }
+  });
+
+  refresh.addEventListener('click', async () => {
+    if (!savedButRefreshFailed || saving) return;
+    saving = true;
+    refresh.disabled = true;
+    message.textContent = 'Refreshing care updates…';
+    message.dataset.state = 'pending';
+    try {
+      await refreshSavedUpdate(savedOwnerUpdateId);
+    } catch (error) {
+      message.textContent = error.message || 'Care updates could not refresh.';
+      message.dataset.state = 'error';
+      refresh.disabled = false;
+      saving = false;
     }
   });
 
@@ -616,7 +669,7 @@ function createTelemetryRibbon(profile, latestObs) {
   `;
   ribbon.appendChild(halfOutdoor);
 
-  // Right Half: Direct Enclosure Telemetry (Step 2 in Reasoning Chain)
+  // Right Half: Owner-provided enclosure readings (Step 2 in Reasoning Chain)
   const halfEnclosure = document.createElement('div');
   halfEnclosure.className = 'telemetry-strip-half';
 
@@ -642,14 +695,14 @@ function createTelemetryRibbon(profile, latestObs) {
   halfEnclosure.innerHTML = `
     <div class="ribbon-header" style="color: var(--color-secondary);">
       <span class="badge-dot" style="background-color: var(--color-secondary);"></span>
-      <span>2. Direct Enclosure Telemetry (${escapeHtml((profile && profile.enclosure_type) || 'Type not recorded')})</span>
+      <span>2. Owner-Reported Enclosure Reading (${escapeHtml((profile && profile.enclosure_type) || 'Type not recorded')})</span>
     </div>
     ${enclosureValueHtml}
     <div class="ribbon-reasoning-flow">
       ${missingReq ? `<strong>Sensor Advisory:</strong> ${escapeHtml(missingReq)}` : `<strong>Enclosure Assessment:</strong> No owner-provided enclosure reading is available.`}
     </div>
     <p class="ribbon-provenance-caption">
-      Direct physical telemetry from inside the animal's enclosure.
+      Owner-provided measurement from inside the animal's enclosure; not sensor-derived telemetry.
     </p>
   `;
   ribbon.appendChild(halfEnclosure);

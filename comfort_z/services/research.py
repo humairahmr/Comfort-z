@@ -23,6 +23,7 @@ from comfort_z.models import (
     Severity,
     StoredObservation,
     Trend,
+    OwnerUpdate,
 )
 from comfort_z.services.comparison import is_valid_animal_observation
 
@@ -143,12 +144,24 @@ def maybe_research(
     trend: Trend,
     alert_status: bool,
     provider: ResearchProvider | None,
+    owner_updates: list[OwnerUpdate] | None = None,
     now: datetime | None = None,
 ) -> ResearchContext:
     """Run at most one small provider query, preserving monitoring on every failure."""
     decision = decide_research(current, prior, trend=trend, alert_status=alert_status)
     if not decision.needed:
         return ResearchContext(decision=decision)
+
+    bounded_owner_updates = list(owner_updates or [])[:8]
+    if bounded_owner_updates:
+        decision = decision.model_copy(
+            update={
+                "research_question": _research_question(
+                    current, trend, owner_updates=bounded_owner_updates
+                )
+            }
+        )
+    owner_update_ids = [update.owner_update_id for update in bounded_owner_updates]
 
     timestamp = now or datetime.now(timezone.utc)
     cached = _recent_matching_research(prior, decision.research_question, timestamp)
@@ -163,11 +176,13 @@ def maybe_research(
             ),
             result=cached.research_context.result,
             reused_from_observation_id=cached.observation_id,
+            owner_update_ids=owner_update_ids,
         )
     if provider is None:
         return ResearchContext(
             decision=decision,
             failure="Research was considered, but no research provider is configured. Monitoring continued unchanged.",
+            owner_update_ids=owner_update_ids,
         )
     try:
         sources = provider.search(decision.research_question or "", max_sources=MAX_RESEARCH_SOURCES)
@@ -178,12 +193,17 @@ def maybe_research(
             alert_status=alert_status,
             retrieved_at=timestamp,
         )
-        return ResearchContext(decision=decision, result=result)
+        return ResearchContext(
+            decision=decision,
+            result=result,
+            owner_update_ids=owner_update_ids,
+        )
     except Exception:
         # Do not leak provider internals, URLs with tokens, or credentials to an API result.
         return ResearchContext(
             decision=decision,
             failure="Research retrieval was unavailable. Monitoring and the existing alert decision continued unchanged.",
+            owner_update_ids=owner_update_ids,
         )
 
 
@@ -252,7 +272,12 @@ def _needed(question: str, trigger: str, reason: str, confidence: float) -> Rese
     )
 
 
-def _research_question(current: StoredObservation, trend: Trend) -> str:
+def _research_question(
+    current: StoredObservation,
+    trend: Trend,
+    *,
+    owner_updates: list[OwnerUpdate] | None = None,
+) -> str:
     animal = current.expected_species or current.animal_name or current.animal_id
     visual = current.gemini_observation
     observed = "; ".join(
@@ -266,10 +291,30 @@ def _research_question(current: StoredObservation, trend: Trend) -> str:
         if part
     )
     environment = _research_environment_context(current)
-    return (
+    question = (
         f"What non-diagnostic, authoritative animal-care guidance is relevant for {animal} with "
         f"a {current.severity.value} observed behavior pattern and a {trend.value} trend? "
         f"Observed context: {observed}. {environment}"
+    )
+    owner_context = _owner_reported_research_context(owner_updates or [])
+    return f"{question} {owner_context}" if owner_context else question
+
+
+def _owner_reported_research_context(owner_updates: list[OwnerUpdate]) -> str:
+    """Keep owner context distinct and small when research already has a visual trigger."""
+    entries: list[str] = []
+    for update in owner_updates[:8]:
+        if update.reading is not None:
+            detail = f"{update.reading.reading_type} {update.reading.value} {update.reading.unit}"
+        else:
+            detail = " ".join((update.note or "").split())[:160]
+        if detail:
+            entries.append(f"{update.category.value}: {detail}")
+    if not entries:
+        return ""
+    return (
+        "OWNER-REPORTED / UNVERIFIED CONTEXT (not visual evidence; do not present it as "
+        "an observed finding): " + "; ".join(entries) + "."
     )
 
 

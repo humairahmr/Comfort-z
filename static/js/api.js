@@ -120,6 +120,11 @@ export class ApiClient {
       body: JSON.stringify(update),
     });
     if (!result) throw new Error('Animal profile was not found.');
+    if (typeof result.owner_update_id !== 'string' || !result.owner_update_id) {
+      const error = new Error('The update may have been saved, but the server response could not confirm it. Refresh Care updates before trying again.');
+      error.mayHavePersisted = true;
+      throw error;
+    }
     return result;
   }
 
