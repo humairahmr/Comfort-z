@@ -11,8 +11,9 @@ import {
   getTrendLabel,
   formatConfidence,
 } from '../state.js';
-import { renderAnimalVisual } from './silhouettes.js';
+import { profileImageSource, renderAnimalVisual } from './silhouettes.js';
 import { createCameraPreviewController, createCameraPreviewState } from './camera-preview.mjs';
+import { runAsyncControl } from './async-action.mjs';
 import { createVoiceUpdatePanel } from './voice-update.js';
 import {
   formatDirectReadingValue,
@@ -389,11 +390,28 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
       ${actions.includes('change') ? '<button type="button" class="btn btn-secondary" data-change>Change source</button>' : ''}
       ${actions.includes('disconnect') ? '<button type="button" class="btn btn-secondary" data-disconnect>Disconnect</button>' : ''}
       ${profile && profile.source_type === 'webcam' ? '<button type="button" class="btn btn-secondary" data-preview>Preview camera</button>' : ''}
+      <button type="button" class="btn btn-secondary" data-edit-location>Edit location</button>
       <label class="profile-photo-action btn btn-secondary">
         Change profile photo
         <input type="file" data-profile-photo accept="image/jpeg,image/png,image/webp">
       </label>
     </div>
+    <p class="monitoring-lifecycle-message" role="status" aria-live="polite"></p>
+    <form class="profile-location-form" hidden novalidate>
+      <div class="profile-location-copy">
+        <strong>Location and outdoor context</strong>
+        <p>Save an owner-provided location label. Outdoor weather context requires both coordinates; Comfort-z never infers them from your device or camera.</p>
+      </div>
+      <label>Location label <input name="location_name" type="text" maxlength="160" value="${escapeHtml((profile && profile.location_name) || '')}" placeholder="For example, Kuching, Sarawak"></label>
+      <div class="profile-location-coordinates">
+        <label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" value="${profile && profile.latitude != null ? escapeHtml(profile.latitude) : ''}" placeholder="1.5533"></label>
+        <label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" value="${profile && profile.longitude != null ? escapeHtml(profile.longitude) : ''}" placeholder="110.3592"></label>
+      </div>
+      <div class="profile-location-actions">
+        <button type="button" class="btn btn-secondary" data-cancel-location>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save location</button>
+      </div>
+    </form>
     <form class="connect-camera-form" hidden novalidate>
       <div>
         <strong>Connect monitoring source</strong>
@@ -410,7 +428,6 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
         <small class="video-source-filename">No video selected.</small>
       </label>
       <div class="connect-camera-actions">
-        <span class="connect-camera-message" role="status" aria-live="polite"></span>
         <button type="button" class="btn btn-secondary" data-preview>Preview camera</button>
         <button type="button" class="btn btn-secondary" data-cancel-connect>Cancel</button>
         <button type="submit" class="btn btn-primary">Connect camera</button>
@@ -419,7 +436,8 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
     <div class="camera-preview" hidden></div>
   `;
   const form = section.querySelector('.connect-camera-form');
-  const message = section.querySelector('.connect-camera-message');
+  const locationForm = section.querySelector('.profile-location-form');
+  const message = section.querySelector('.monitoring-lifecycle-message');
   const preview = section.querySelector('.camera-preview');
   const cameraFields = section.querySelector('.camera-source-fields');
   const videoFields = section.querySelector('.video-source-fields');
@@ -428,6 +446,7 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   const sourceOptions = section.querySelectorAll('[data-source-mode]');
   const sourcePreviewButtons = section.querySelectorAll('[data-preview]');
   const sourceSubmit = form.querySelector('[type="submit"]');
+  const locationSubmit = locationForm.querySelector('[type="submit"]');
   let sourceMode = initialSourceMode;
   const setSourceMode = (mode) => {
     sourceMode = mode;
@@ -502,6 +521,7 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
     return previewController.capture(index);
   };
   const openConnect = () => {
+    locationForm.hidden = true;
     form.hidden = false;
     setSourceMode(sourceMode);
     (sourceMode === 'camera' ? form.elements.camera_index : videoInput).focus();
@@ -509,6 +529,15 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   section.querySelector('[data-connect]')?.addEventListener('click', openConnect);
   section.querySelector('[data-change]')?.addEventListener('click', openConnect);
   section.querySelector('[data-cancel-connect]')?.addEventListener('click', () => { form.hidden = true; message.textContent = ''; });
+  section.querySelector('[data-edit-location]').addEventListener('click', () => {
+    form.hidden = true;
+    locationForm.hidden = false;
+    locationForm.elements.location_name.focus();
+  });
+  section.querySelector('[data-cancel-location]').addEventListener('click', () => {
+    locationForm.hidden = true;
+    message.textContent = '';
+  });
   sourceOptions.forEach((option) => option.addEventListener('click', () => setSourceMode(option.dataset.sourceMode)));
   sourcePreviewButtons.forEach((button) => button.addEventListener('click', showPreview));
   videoInput.addEventListener('change', () => {
@@ -516,53 +545,84 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
     videoFilename.textContent = selected ? selected.name : 'No video selected.';
   });
   section.querySelector('[data-profile-photo]').addEventListener('change', async (event) => {
-    const photo = event.currentTarget.files && event.currentTarget.files[0];
+    const input = event.currentTarget;
+    const photo = input.files && input.files[0];
     if (!photo) return;
-    event.currentTarget.disabled = true;
     message.textContent = 'Saving profile photo…';
     try {
-      await api.uploadProfilePhoto(animalId, photo);
-      message.textContent = '';
-      await onRefresh();
+      await runAsyncControl(input, async () => {
+        await api.uploadProfilePhoto(animalId, photo);
+        message.textContent = '';
+        await onRefresh();
+      });
     } catch (error) {
       message.textContent = error.message || 'Unable to save the profile photo.';
     } finally {
-      event.currentTarget.disabled = false;
-      event.currentTarget.value = '';
+      if (input.isConnected) input.value = '';
     }
   });
   section.querySelector('[data-start]')?.addEventListener('click', async (event) => {
-    event.currentTarget.disabled = true;
-    try { await api.startMonitoring(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to start monitoring.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+    const button = event.currentTarget;
+    try { await runAsyncControl(button, async () => { await api.startMonitoring(animalId); await onRefresh(); }); } catch (error) { message.textContent = error.message || 'Unable to start monitoring.'; form.hidden = false; }
   });
   section.querySelector('[data-pause]')?.addEventListener('click', async (event) => {
-    event.currentTarget.disabled = true;
-    try { await api.pauseMonitoring(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to pause monitoring.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+    const button = event.currentTarget;
+    try { await runAsyncControl(button, async () => { await api.pauseMonitoring(animalId); await onRefresh(); }); } catch (error) { message.textContent = error.message || 'Unable to pause monitoring.'; form.hidden = false; }
   });
   section.querySelector('[data-disconnect]')?.addEventListener('click', async (event) => {
-    event.currentTarget.disabled = true;
-    try { await api.disconnectMonitoringSource(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to disconnect the source.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+    const button = event.currentTarget;
+    try { await runAsyncControl(button, async () => { await api.disconnectMonitoringSource(animalId); await onRefresh(); }); } catch (error) { message.textContent = error.message || 'Unable to disconnect the source.'; form.hidden = false; }
+  });
+  locationForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const locationName = locationForm.elements.location_name.value.trim();
+    const latitudeValue = locationForm.elements.latitude.value.trim();
+    const longitudeValue = locationForm.elements.longitude.value.trim();
+    if (Boolean(latitudeValue) !== Boolean(longitudeValue)) {
+      message.textContent = 'Enter both latitude and longitude, or leave both blank.';
+      return;
+    }
+    const latitude = latitudeValue ? Number(latitudeValue) : null;
+    const longitude = longitudeValue ? Number(longitudeValue) : null;
+    if ((latitude !== null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90))
+      || (longitude !== null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
+      message.textContent = 'Enter valid latitude and longitude coordinates.';
+      return;
+    }
+    message.textContent = 'Saving location…';
+    try {
+      await runAsyncControl(locationSubmit, async () => {
+        await api.updateMonitoringLocation(animalId, {
+          location_name: locationName || null,
+          latitude,
+          longitude,
+        });
+        message.textContent = '';
+        await onRefresh();
+      });
+    } catch (error) {
+      message.textContent = error.message || 'Unable to save this location.';
+    }
   });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    sourceSubmit.disabled = true;
     try {
-      if (sourceMode === 'video') {
-        const video = videoInput.files && videoInput.files[0];
-        if (!video) { message.textContent = 'Choose a video file first.'; return; }
-        message.textContent = 'Uploading video…';
-        await api.uploadMonitoringVideo(animalId, video);
-      } else {
-        const index = Number(form.elements.camera_index.value);
-        if (!Number.isInteger(index) || index < 0) { message.textContent = 'Enter a whole camera index of 0 or higher.'; return; }
-        message.textContent = 'Connecting camera…';
-        await api.setMonitoringSource(animalId, { source_type: 'webcam', source_reference: index });
-      }
-      await onRefresh();
+      await runAsyncControl(sourceSubmit, async () => {
+        if (sourceMode === 'video') {
+          const video = videoInput.files && videoInput.files[0];
+          if (!video) { message.textContent = 'Choose a video file first.'; return; }
+          message.textContent = 'Uploading video…';
+          await api.uploadMonitoringVideo(animalId, video);
+        } else {
+          const index = Number(form.elements.camera_index.value);
+          if (!Number.isInteger(index) || index < 0) { message.textContent = 'Enter a whole camera index of 0 or higher.'; return; }
+          message.textContent = 'Connecting camera…';
+          await api.setMonitoringSource(animalId, { source_type: 'webcam', source_reference: index });
+        }
+        await onRefresh();
+      });
     } catch (error) {
       message.textContent = error.message || (sourceMode === 'video' ? 'Unable to upload this video.' : 'Unable to connect this camera.');
-    } finally {
-      sourceSubmit.disabled = false;
     }
   });
   setSourceMode(sourceMode);
@@ -605,6 +665,7 @@ function createAnimalHero(animalId, profile, latestObs) {
       <span class="hero-silhouette-caption">Decorative silhouette representation • Animal profile photograph not configured</span>
     `;
 
+  const hasProfilePhoto = Boolean(profileImageSource(profile || {}));
   const photoHtml = renderAnimalVisual(
     profile || { expected_species: species },
     { className: 'hero-profile-visual', alt: `Profile of ${name}` }
@@ -647,7 +708,7 @@ function createAnimalHero(animalId, profile, latestObs) {
 
     <div class="hero-portrait-frame">
       ${photoHtml}
-      <span class="hero-silhouette-caption">Decorative profile fallback</span>
+      ${hasProfilePhoto ? '' : '<span class="hero-silhouette-caption">Decorative profile fallback</span>'}
     </div>
   `;
 

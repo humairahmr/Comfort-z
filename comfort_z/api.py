@@ -55,6 +55,7 @@ from comfort_z.tools.monitoring import (
     monitor_next_window,
     pause_monitoring,
     record_owner_update,
+    set_profile_location,
     set_profile_photo_reference,
     start_monitoring,
 )
@@ -129,6 +130,21 @@ class MonitoringSourceRequest(BaseModel):
             raise ValueError("webcam source_reference must be an integer camera index.")
         if isinstance(self.source_reference, str) and not self.source_reference.strip():
             raise ValueError("source_reference cannot be empty.")
+        return self
+
+
+class MonitoringLocationRequest(BaseModel):
+    """Explicit owner-supplied location; coordinates are never inferred."""
+
+    location_name: str | None = Field(default=None, max_length=160)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def validate_location(self) -> "MonitoringLocationRequest":
+        self.location_name = self.location_name.strip() if self.location_name else None
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be provided together or both omitted.")
         return self
 
 
@@ -374,6 +390,22 @@ async def get_monitoring_profile(animal_id: str) -> dict:
     if profile is None:
         raise HTTPException(status_code=404, detail="Monitoring profile was not found.")
     return _profile_payload(profile)
+
+
+@app.put("/monitoring/{animal_id}/location")
+async def update_monitoring_location(animal_id: str, request: MonitoringLocationRequest) -> dict:
+    """Update only owner-provided location context; monitoring state is preserved."""
+    try:
+        saved = await run_in_threadpool(
+            set_profile_location,
+            animal_id,
+            request.location_name,
+            request.latitude,
+            request.longitude,
+        )
+        return _profile_payload(saved)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
 
 
 @app.post("/animals/{animal_id}/profile-photo")

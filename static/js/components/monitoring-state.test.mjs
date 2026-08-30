@@ -70,3 +70,31 @@ test('owner-facing media controls use file pickers and never disclose storage pa
   assert.doesNotMatch(onboarding, /gs:\/\//);
   assert.doesNotMatch(dashboard, /demo_videos|Raku\.mp4/i);
 });
+
+test('persisted profile photos render before silhouettes across dashboard collections', async () => {
+  const [dashboard, overview, silhouettes] = await Promise.all([
+    readFile(new URL('./dashboard.js', import.meta.url), 'utf8'),
+    readFile(new URL('./overview.js', import.meta.url), 'utf8'),
+    readFile(new URL('./silhouettes.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(silhouettes, /profile\.profile_photo_url/);
+  assert.match(silhouettes, /if \(photo\)[\s\S]*<img/);
+  assert.match(dashboard, /profileImageSource\(profile \|\| \{\}\)/);
+  assert.match(overview, /profileImageSource\(profile\)/);
+  assert.match(dashboard, /hasProfilePhoto \? '' : '<span class="hero-silhouette-caption/);
+  assert.match(overview, /profileImageSource\(profile\) \? '' : '<span class="visual-disclaimer/);
+});
+
+test('dashboard async controls tolerate DOM replacement and location editing is explicit', async () => {
+  const [dashboard, api] = await Promise.all([
+    readFile(new URL('./dashboard.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(dashboard, /runAsyncControl/);
+  assert.doesNotMatch(dashboard, /finally\s*\{\s*event\.currentTarget\.disabled/);
+  assert.match(dashboard, /Edit location/);
+  assert.match(dashboard, /Outdoor weather context requires both coordinates/);
+  assert.match(api, /updateMonitoringLocation/);
+});

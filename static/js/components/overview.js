@@ -1,7 +1,7 @@
 /** Overview: real monitoring profiles with decorative, local profile fallbacks. */
 
 import { formatTimestamp } from '../state.js';
-import { renderAnimalVisual } from './silhouettes.js';
+import { profileImageSource, renderAnimalVisual } from './silhouettes.js';
 import {
   hasMonitoringSource,
   monitoringDisplayPriority,
@@ -133,7 +133,7 @@ function createHero(profile, navigate) {
   hero.innerHTML = `
     <div class="animal-hero-visual-wrap">
       ${renderAnimalVisual(profile, { className: 'animal-hero-visual', alt: `Profile of ${name}` })}
-      <span class="visual-disclaimer">Decorative profile fallback</span>
+      ${profileImageSource(profile) ? '' : '<span class="visual-disclaimer">Decorative profile fallback</span>'}
     </div>
     <div class="animal-hero-copy">
       <div class="animal-hero-status"><span class="status-orb ${monitoringStatusClass(profile)}"></span>${monitoringStatusText(profile)}</div>

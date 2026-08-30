@@ -11,6 +11,7 @@ from comfort_z.services.media import LocalMediaStore, MediaStorageError
 from comfort_z.services.orchestration import (
     connect_monitoring_source,
     create_or_update_monitoring_profile,
+    set_profile_location,
     set_profile_photo_reference,
 )
 from comfort_z.services.repository import LocalJsonMonitoringStateRepository
@@ -18,6 +19,8 @@ from comfort_z.services.source import resolve_video_source
 
 
 JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00portrait"
+PNG = b"\x89PNG\r\n\x1a\nportrait"
+WEBP = b"RIFF\x10\x00\x00\x00WEBPportrait"
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2"
 
 
@@ -53,6 +56,26 @@ def test_profile_photo_upload_is_validated_and_stored_with_generated_reference(t
     assert ".." not in stored.reference
     assert store.resolve(stored.reference).parent == (tmp_path / "media" / "profile-photo").resolve()
     assert store.public_url(stored.reference).startswith("/media/profile-photo/")
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type", "filename", "stored_suffix"),
+    [
+        (JPEG, "image/jpeg", "portrait.jpg", ".jpg"),
+        (JPEG, "image/jpeg", "portrait.jpeg", ".jpg"),
+        (JPEG, "image/jpeg", "portrait.jfif", ".jpg"),
+        (PNG, "image/png", "portrait.png", ".png"),
+        (WEBP, "image/webp", "portrait.webp", ".webp"),
+    ],
+)
+def test_profile_photo_accepts_supported_image_extensions(
+    tmp_path, content, content_type, filename, stored_suffix
+):
+    stored = LocalMediaStore(tmp_path / "media").save_profile_photo(
+        content, content_type=content_type, original_name=filename
+    )
+
+    assert stored.reference.endswith(stored_suffix)
 
 
 @pytest.mark.parametrize(
@@ -110,6 +133,36 @@ def test_profile_photo_changes_no_monitoring_state(tmp_path):
     assert saved.source_cursor_seconds == original.source_cursor_seconds
     assert saved.source_cursor_frame_index == original.source_cursor_frame_index
     assert saved.samples_used_in_current_period == original.samples_used_in_current_period
+    reloaded = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json").get_profile("milo")
+    assert reloaded is not None
+    assert reloaded.profile_photo_reference == saved.profile_photo_reference
+
+
+def test_profile_location_changes_only_location_fields(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    original = profile(location_name=None, latitude=None, longitude=None)
+    repository.save_profile(original)
+
+    saved = set_profile_location(
+        "milo",
+        location_name="Kuching, Sarawak",
+        latitude=1.5533,
+        longitude=110.3592,
+        state_repository=repository,
+    )
+
+    assert saved.location_name == "Kuching, Sarawak"
+    assert saved.latitude == 1.5533
+    assert saved.longitude == 110.3592
+    assert saved.source_reference == original.source_reference
+    assert saved.source_type == original.source_type
+    assert saved.active == original.active
+    assert saved.source_cursor_seconds == original.source_cursor_seconds
+    assert saved.source_cursor_frame_index == original.source_cursor_frame_index
+    assert saved.samples_used_in_current_period == original.samples_used_in_current_period
+    reloaded = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json").get_profile("milo")
+    assert reloaded is not None
+    assert reloaded.location_name == "Kuching, Sarawak"
 
 
 def test_uploaded_video_resolves_only_from_the_app_media_store(tmp_path, monkeypatch):
@@ -158,6 +211,11 @@ def test_api_uploads_photo_and_video_without_running_monitoring(tmp_path, monkey
     assert served_photo.status_code == 200
     assert served_photo.headers["content-type"].startswith("image/jpeg")
     assert served_photo.content == JPEG
+    persisted_photo = LocalJsonMonitoringStateRepository(state_path).get_profile("milo")
+    assert persisted_photo is not None
+    assert persisted_photo.profile_photo_reference == photo_response.json()["profile_photo_reference"]
+    assert client.get("/monitoring/milo/profile").json()["profile_photo_url"] == photo_url
+    assert client.get("/animals").json()[0]["profile_photo_url"] == photo_url
     assert video_response.status_code == 200
     assert video_response.json()["source_type"] == "video"
     assert video_response.json()["source_display_name"] == "Milo clip.mp4"
@@ -169,6 +227,39 @@ def test_api_uploads_photo_and_video_without_running_monitoring(tmp_path, monkey
     assert saved.source_cursor_seconds == 0
     assert saved.source_cursor_frame_index is None
     assert saved.samples_used_in_current_period == 3
+
+
+def test_api_updates_location_without_replacing_profile_state(tmp_path, monkeypatch):
+    state_path = tmp_path / "monitoring_state.json"
+    monkeypatch.setenv("OBSERVATION_STORE", "local")
+    monkeypatch.setenv("LOCAL_MONITORING_STATE_FILE", str(state_path))
+    repository = LocalJsonMonitoringStateRepository(state_path)
+    original = profile()
+    repository.save_profile(original)
+    client = TestClient(api.app)
+
+    response = client.put(
+        "/monitoring/milo/location",
+        json={
+            "location_name": "Kuching, Sarawak",
+            "latitude": 1.5533,
+            "longitude": 110.3592,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["location_name"] == "Kuching, Sarawak"
+    saved = LocalJsonMonitoringStateRepository(state_path).get_profile("milo")
+    assert saved is not None
+    assert saved.latitude == 1.5533
+    assert saved.longitude == 110.3592
+    assert saved.source_reference == original.source_reference
+    assert saved.active == original.active
+    assert saved.source_cursor_seconds == original.source_cursor_seconds
+    assert saved.samples_used_in_current_period == original.samples_used_in_current_period
+    assert client.put(
+        "/monitoring/milo/location", json={"location_name": "Kuching", "latitude": 1.5533}
+    ).status_code == 422
 
 
 def test_profile_payload_uses_fallback_when_a_photo_object_is_missing(tmp_path, monkeypatch):

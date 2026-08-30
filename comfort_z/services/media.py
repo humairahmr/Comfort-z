@@ -36,6 +36,16 @@ _MEDIA_TYPES = {
         "video/quicktime": ".mov",
     },
 }
+_MEDIA_SUFFIXES = {
+    "profile-photo": {
+        "image/jpeg": {".jpg", ".jpeg", ".jfif"},
+        "image/png": {".png"},
+        "image/webp": {".webp"},
+    },
+    "video": {
+        content_type: {suffix} for content_type, suffix in _MEDIA_TYPES["video"].items()
+    },
+}
 _REFERENCE_PATTERN = re.compile(r"^(profile-photo|video)/([0-9a-f]{32})(\.[a-z0-9]+)$")
 
 
@@ -133,7 +143,7 @@ class LocalMediaStore:
         if normalized_type not in allowed:
             raise MediaStorageError(f"Unsupported {kind.replace('-', ' ')} type.")
         supplied_suffix = PurePosixPath((original_name or "").replace("\\", "/")).suffix.lower()
-        if supplied_suffix and supplied_suffix != allowed[normalized_type]:
+        if supplied_suffix and supplied_suffix not in _MEDIA_SUFFIXES[kind][normalized_type]:
             raise MediaStorageError(f"{kind.replace('-', ' ').capitalize()} filename does not match its type.")
 
     @staticmethod

@@ -178,6 +178,23 @@ def set_profile_photo_reference(animal_id: str, profile_photo_reference: str) ->
     return set_photo(animal_id.strip(), profile_photo_reference).model_dump(mode="json")
 
 
+def set_profile_location(
+    animal_id: str,
+    location_name: str | None,
+    latitude: float | None,
+    longitude: float | None,
+) -> dict:
+    """Save explicit owner location context without changing monitoring state."""
+    from comfort_z.services.orchestration import set_profile_location as set_location
+
+    return set_location(
+        animal_id.strip(),
+        location_name=location_name,
+        latitude=latitude,
+        longitude=longitude,
+    ).model_dump(mode="json")
+
+
 def monitor_next_window(animal_id: str, window_max_samples: int = 2) -> dict:
     """Run only the next bounded source window for a saved monitoring profile."""
     from comfort_z.services.orchestration import monitor_next_window as run_next_window

@@ -95,9 +95,20 @@
 .monitoring-lifecycle-copy h2 { margin: 0; color: var(--color-primary); font-family: Georgia, 'Times New Roman', serif; font-size: 1.24rem; letter-spacing: -.035em; }
 .monitoring-lifecycle-copy p { max-width: 64ch; margin: 4px 0 0; color: var(--color-text-secondary); font-size: .76rem; line-height: 1.45; }
 .monitoring-lifecycle-actions, .connect-camera-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.monitoring-lifecycle-message { flex: 1 0 100%; min-height: 1.3em; margin: -6px 0 0; color: var(--color-text-secondary); font-size: .74rem; }
 .profile-photo-action { position: relative; overflow: hidden; }
 .profile-photo-action input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 .profile-photo-action:focus-within { color: #fff; background: var(--color-primary); border-color: var(--color-primary); outline: 3px solid rgba(15,48,64,.18); outline-offset: 2px; }
+.profile-location-form { display: grid; grid-template-columns: minmax(0,1fr) minmax(220px,.65fr); gap: 13px 16px; width: 100%; padding-top: 15px; border-top: 1px solid rgba(15,48,64,.14); }
+.profile-location-form[hidden] { display: none !important; }
+.profile-location-copy { grid-column: 1 / -1; }
+.profile-location-form strong { color: var(--color-primary); font-size: .8rem; }
+.profile-location-form p { max-width: 68ch; margin: 4px 0 0; color: var(--color-text-secondary); font-size: .73rem; line-height: 1.45; }
+.profile-location-form label { display: grid; gap: 6px; color: var(--color-primary); font-size: .71rem; font-weight: 750; }
+.profile-location-form input { min-height: 38px; box-sizing: border-box; padding: 8px 10px; color: var(--color-text-primary); background: #fffdfa; border: 1px solid #d9d0c6; border-radius: 9px; font: inherit; font-size: .82rem; }
+.profile-location-form input:focus { border-color: var(--color-primary); outline: 3px solid rgba(15,48,64,.12); outline-offset: 1px; }
+.profile-location-coordinates { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.profile-location-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; }
 .connect-camera-form { display: grid; grid-template-columns: minmax(0,1fr) minmax(120px,.35fr); gap: 12px 16px; width: 100%; padding-top: 15px; border-top: 1px solid rgba(15,48,64,.14); }
 .connect-camera-form[hidden] { display: none !important; }
 .connect-camera-form strong { color: var(--color-primary); font-size: .8rem; }
@@ -112,7 +123,6 @@
 .camera-source-fields, .video-source-fields { grid-column: 1 / -1; max-width: 480px; }
 .video-source-fields small { color: var(--color-text-muted); font-size: .7rem; font-weight: 500; overflow-wrap: anywhere; }
 .connect-camera-actions { grid-column: 1 / -1; justify-content: space-between; }
-.connect-camera-message { min-height: 1.3em; color: var(--color-text-secondary); font-size: .74rem; }
 .camera-preview { display: grid; gap: 10px; width: 100%; padding-top: 15px; border-top: 1px solid rgba(15,48,64,.14); }
 .camera-preview[hidden] { display: none !important; }
 .camera-preview-heading { display: grid; gap: 3px; color: var(--color-primary); font-size: .78rem; }
@@ -120,7 +130,7 @@
 .camera-preview-media { position: relative; width: min(100%, 430px); overflow: hidden; background: #071d27; border-radius: 10px; }
 .camera-preview img { display: block; width: 100%; max-height: 270px; object-fit: contain; background: #071d27; }
 .camera-preview-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(7,29,39,.74); font-size: .74rem; }
-@media (max-width: 780px) { .all-animals-heading-actions { align-items: flex-start; flex-wrap: wrap; } .source-mode-picker { justify-self: start; } }
+@media (max-width: 780px) { .all-animals-heading-actions { align-items: flex-start; flex-wrap: wrap; } .source-mode-picker { justify-self: start; } .profile-location-form { grid-template-columns: 1fr; } .profile-location-coordinates { grid-template-columns: 1fr; } .profile-location-actions { justify-content: flex-start; } }
 @media (prefers-reduced-motion: reduce) { .add-animal-card, .all-animals-add-action { transition: none; } .add-animal-card:is(:hover, :focus-visible), .all-animals-add-action:is(:hover, :focus-visible) { transform: none; } }
 .overview-empty-state { padding: 44px; border-radius: 16px; color: var(--color-text-secondary); background: #fff; box-shadow: 0 8px 20px rgba(15,48,64,.06); }
 .overview-empty-state h2 { margin: 0; color: var(--color-primary); font-family: Georgia, 'Times New Roman', serif; }

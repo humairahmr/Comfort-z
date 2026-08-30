@@ -182,6 +182,30 @@ def set_profile_photo_reference(
     )
 
 
+def set_profile_location(
+    animal_id: str,
+    *,
+    location_name: str | None,
+    latitude: float | None,
+    longitude: float | None,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Update owner-supplied location context without replacing monitoring state."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    return state.save_profile(
+        profile.model_copy(
+            update={
+                "location_name": location_name,
+                "latitude": latitude,
+                "longitude": longitude,
+                "updated_at": now or datetime.now(timezone.utc),
+            }
+        )
+    )
+
+
 def _require_profile(state: MonitoringStateRepository, animal_id: str) -> MonitoringProfile:
     profile = state.get_profile(animal_id.strip())
     if profile is None:

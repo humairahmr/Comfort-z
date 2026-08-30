@@ -183,6 +183,14 @@ export class ApiClient {
     return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/pause`, { method: 'POST' });
   }
 
+  async updateMonitoringLocation(animalId, location) {
+    if (!animalId) throw new Error('Animal ID is required to update location.');
+    return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/location`, {
+      method: 'PUT',
+      body: JSON.stringify(location),
+    });
+  }
+
   async previewLocalCamera(cameraIndex) {
     if (!Number.isInteger(cameraIndex) || cameraIndex < 0) {
       throw new Error('Enter a whole camera index of 0 or higher.');
