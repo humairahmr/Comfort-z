@@ -119,10 +119,11 @@ async function loadAllAnimalsRoute() {
 
 async function loadDashboardRoute(animalId) {
   try {
-    const [profile, observations, reports] = await Promise.all([
+    const [profile, observations, reports, ownerUpdates] = await Promise.all([
       api.getProfile(animalId).catch(() => null),
       api.getObservations(animalId, 10).catch(() => []),
       api.getReports(animalId, 5).catch(() => []),
+      api.getOwnerUpdates(animalId, 5).catch(() => []),
     ]);
 
     state.selectedAnimalId = animalId;
@@ -130,10 +131,26 @@ async function loadDashboardRoute(animalId) {
     state.currentObservations = observations;
     state.currentReports = reports;
 
-    appRoot.innerHTML = '';
-    appRoot.appendChild(
-      renderDashboard(animalId, profile, observations, reports, navigate, () => loadDashboardRoute(animalId))
-    );
+    const renderWithOwnerUpdates = (nextOwnerUpdates) => {
+      appRoot.innerHTML = '';
+      appRoot.appendChild(
+        renderDashboard(
+          animalId,
+          profile,
+          observations,
+          reports,
+          nextOwnerUpdates,
+          navigate,
+          () => loadDashboardRoute(animalId),
+          async () => {
+            const refreshedUpdates = await api.getOwnerUpdates(animalId, 5);
+            renderWithOwnerUpdates(refreshedUpdates);
+          }
+        )
+      );
+    };
+
+    renderWithOwnerUpdates(ownerUpdates);
   } catch (err) {
     renderError(`Failed to load dashboard for animal: ${animalId}`, err.message);
   }

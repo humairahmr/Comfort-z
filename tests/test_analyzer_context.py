@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from comfort_z.models import DirectEnvironmentReading, EnvironmentContext
+from comfort_z.models import DirectEnvironmentReading, EnvironmentContext, OwnerUpdate
 from comfort_z.services.analyzer import GeminiVisualAnalyzer
 
 
@@ -65,6 +65,27 @@ def test_outdoor_context_is_explicitly_not_treated_as_enclosure_data(tmp_path):
     assert "must never be treated as the temperature" in model.contents[0]
     assert "Outdoor/local weather context" in model.contents[0]
     assert "water_temperature" in model.contents[0]
+
+
+def test_direct_readings_and_owner_context_work_without_outdoor_weather(tmp_path):
+    image = tmp_path / "frame.jpg"
+    image.write_bytes(b"not-decoded-by-fake-client")
+    model = CapturingModel()
+    analyzer = GeminiVisualAnalyzer.__new__(GeminiVisualAnalyzer)
+    analyzer.model = "gemini-3.5-flash"
+    analyzer.client = SimpleNamespace(models=model)
+
+    analyzer.analyze_file(
+        str(image),
+        direct_environment_readings=[
+            DirectEnvironmentReading(reading_type="water_temperature", value=27, unit="C")
+        ],
+        owner_updates=[OwnerUpdate(animal_id="raku", category="feeding", note="Fed at 8 PM.")],
+    )
+
+    assert "water_temperature" in model.contents[0]
+    assert "OWNER-REPORTED CONTEXT" in model.contents[0]
+    assert "must not independently determine severity" in model.contents[0]
 
 
 def test_gemini_daily_report_generator_serializes_structured_history_to_json():

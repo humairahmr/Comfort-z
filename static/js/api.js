@@ -102,6 +102,28 @@ export class ApiClient {
   }
 
   /**
+   * Retrieve owner-provided care context separately from Gemini observations.
+   */
+  async getOwnerUpdates(animalId, limit = 20) {
+    if (!animalId) return [];
+    const result = await this.fetchJson(`/animals/${encodeURIComponent(animalId)}/owner-updates?limit=${limit}`);
+    return Array.isArray(result) ? result : [];
+  }
+
+  /**
+   * Save one owner update without starting monitoring or report generation.
+   */
+  async createOwnerUpdate(animalId, update) {
+    if (!animalId) throw new Error('Animal ID is required to add an update.');
+    const result = await this.fetchJson(`/animals/${encodeURIComponent(animalId)}/owner-updates`, {
+      method: 'POST',
+      body: JSON.stringify(update),
+    });
+    if (!result) throw new Error('Animal profile was not found.');
+    return result;
+  }
+
+  /**
    * Trigger a single bounded observation cycle for an animal.
    */
   async runNextWindow(animalId, windowMaxSamples = 1) {

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
-from comfort_z.models import DailyMonitoringReport, MonitoringProfile, StoredObservation
+from comfort_z.models import DailyMonitoringReport, MonitoringProfile, OwnerUpdate, StoredObservation
 
 load_dotenv()
 
@@ -149,6 +150,24 @@ class MonitoringStateRepository(ABC):
     def recent_reports(self, animal_id: str, limit: int = 5) -> list[DailyMonitoringReport]:
         """Return newest reports first."""
 
+    @abstractmethod
+    def save_owner_update(self, update: OwnerUpdate) -> OwnerUpdate:
+        """Persist one owner-provided care update without replacing profile state."""
+
+    @abstractmethod
+    def recent_owner_updates(self, animal_id: str, limit: int = 20) -> list[OwnerUpdate]:
+        """Return newest owner updates first."""
+
+    @abstractmethod
+    def owner_updates_for_period(
+        self,
+        animal_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> list[OwnerUpdate]:
+        """Return a bounded chronological context set for monitoring or reporting."""
+
 
 class LocalJsonMonitoringStateRepository(MonitoringStateRepository):
     """Development fallback stored separately from existing observation JSON."""
@@ -158,11 +177,12 @@ class LocalJsonMonitoringStateRepository(MonitoringStateRepository):
 
     def _read(self) -> dict:
         if not self.path.exists():
-            return {"profiles": {}, "reports": []}
+            return {"profiles": {}, "reports": [], "owner_updates": {}}
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         return {
             "profiles": payload.get("profiles", {}),
             "reports": payload.get("reports", []),
+            "owner_updates": payload.get("owner_updates", {}),
         }
 
     def _write(self, payload: dict) -> None:
@@ -197,9 +217,38 @@ class LocalJsonMonitoringStateRepository(MonitoringStateRepository):
         ]
         return sorted(reports, key=lambda item: item.generated_at, reverse=True)[:limit]
 
+    def save_owner_update(self, update: OwnerUpdate) -> OwnerUpdate:
+        payload = self._read()
+        payload["owner_updates"].setdefault(update.animal_id, []).append(
+            update.model_dump(mode="json")
+        )
+        self._write(payload)
+        return update
+
+    def recent_owner_updates(self, animal_id: str, limit: int = 20) -> list[OwnerUpdate]:
+        updates = [
+            OwnerUpdate.model_validate(item)
+            for item in self._read()["owner_updates"].get(animal_id, [])
+        ]
+        return sorted(updates, key=lambda item: item.occurred_at, reverse=True)[:limit]
+
+    def owner_updates_for_period(
+        self,
+        animal_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> list[OwnerUpdate]:
+        updates = [
+            item
+            for item in self.recent_owner_updates(animal_id, limit=1000)
+            if start <= item.occurred_at <= end
+        ]
+        return sorted(updates, key=lambda item: item.occurred_at, reverse=True)[:limit]
+
 
 class FirestoreMonitoringStateRepository(MonitoringStateRepository):
-    """Firestore state at animals/{id}/monitoring/profile and /reports/{report_id}."""
+    """Firestore state at animals/{id}/monitoring/profile, reports, and owner updates."""
 
     def __init__(self, project: str, client: object | None = None) -> None:
         try:
@@ -295,6 +344,56 @@ class FirestoreMonitoringStateRepository(MonitoringStateRepository):
         except Exception as error:
             raise ObservationRepositoryError(
                 f"Could not retrieve daily reports for animal {animal_id}. "
+                "Check network and Firestore permissions."
+            ) from error
+
+    def save_owner_update(self, update: OwnerUpdate) -> OwnerUpdate:
+        try:
+            self._animal_document(update.animal_id).collection("owner_updates").document(
+                update.owner_update_id
+            ).set(update.model_dump(mode="json"))
+        except Exception as error:
+            raise ObservationRepositoryError(
+                f"Could not save owner update {update.owner_update_id} for animal "
+                f"{update.animal_id}. Check network and Firestore permissions."
+            ) from error
+        return update
+
+    def recent_owner_updates(self, animal_id: str, limit: int = 20) -> list[OwnerUpdate]:
+        try:
+            query = (
+                self._animal_document(animal_id)
+                .collection("owner_updates")
+                .order_by("occurred_at", direction=self._firestore.Query.DESCENDING)
+                .limit(limit)
+            )
+            return [OwnerUpdate.model_validate(doc.to_dict()) for doc in query.stream()]
+        except Exception as error:
+            raise ObservationRepositoryError(
+                f"Could not retrieve owner updates for animal {animal_id}. "
+                "Check network and Firestore permissions."
+            ) from error
+
+    def owner_updates_for_period(
+        self,
+        animal_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> list[OwnerUpdate]:
+        try:
+            query = (
+                self._animal_document(animal_id)
+                .collection("owner_updates")
+                .where("occurred_at", ">=", start.isoformat())
+                .where("occurred_at", "<=", end.isoformat())
+                .order_by("occurred_at", direction=self._firestore.Query.DESCENDING)
+                .limit(limit)
+            )
+            return [OwnerUpdate.model_validate(doc.to_dict()) for doc in query.stream()]
+        except Exception as error:
+            raise ObservationRepositoryError(
+                f"Could not retrieve owner-update context for animal {animal_id}. "
                 "Check network and Firestore permissions."
             ) from error
 

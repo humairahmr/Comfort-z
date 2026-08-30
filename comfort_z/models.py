@@ -98,6 +98,54 @@ class DirectEnvironmentReading(BaseModel):
     source: Literal["owner"] = "owner"
 
 
+class OwnerUpdateCategory(str, Enum):
+    """The kind of owner-provided context recorded outside visual observations."""
+
+    MEASUREMENT = "measurement"
+    FEEDING = "feeding"
+    CARE = "care"
+    APPETITE = "appetite"
+    BEHAVIOR = "behavior"
+    AVAILABILITY = "availability"
+    NOTE = "note"
+
+
+class OwnerUpdate(BaseModel):
+    """Persistent owner context; it is never a Gemini visual observation."""
+
+    owner_update_id: str = Field(default_factory=lambda: str(uuid4()))
+    animal_id: str = Field(min_length=1)
+    category: OwnerUpdateCategory
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    source: Literal["owner"] = "owner"
+    # Voice ingestion can normalize into this same record later without changing history.
+    input_method: Literal["typed", "voice"] = "typed"
+    note: str | None = Field(default=None, max_length=500)
+    reading: DirectEnvironmentReading | None = None
+
+    @model_validator(mode="after")
+    def validate_owner_update(self) -> "OwnerUpdate":
+        if self.occurred_at.tzinfo is None or self.recorded_at.tzinfo is None:
+            raise ValueError("owner update timestamps must include a timezone.")
+        self.occurred_at = self.occurred_at.astimezone(timezone.utc)
+        self.recorded_at = self.recorded_at.astimezone(timezone.utc)
+        note = self.note.strip() if self.note else None
+        if self.category == OwnerUpdateCategory.MEASUREMENT:
+            if self.reading is None:
+                raise ValueError("measurement updates require a direct reading.")
+            self.reading = self.reading.model_copy(update={"recorded_at": self.occurred_at})
+            if note == "":
+                self.note = None
+            return self
+        if self.reading is not None:
+            raise ValueError("only measurement updates may include a direct reading.")
+        if not note:
+            raise ValueError("non-measurement updates require a non-empty note.")
+        self.note = note
+        return self
+
+
 class EnvironmentContext(BaseModel):
     """Outdoor/local conditions that may support, but never replace, enclosure data."""
 
@@ -142,6 +190,8 @@ class StoredObservation(BaseModel):
     source_info: str | None = None
     environment_context: EnvironmentContext | None = None
     direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
+    # Bounded provenance only; owner wording remains in the owner-updates repository.
+    owner_update_ids: list[str] = Field(default_factory=list)
     missing_direct_reading_requests: list[str] = Field(default_factory=list)
     research_context: ResearchContext | None = None
     # Persist the existing policy outcome so period reports can describe alerts
@@ -248,6 +298,7 @@ class DailyReportNarrative(BaseModel):
     visibility_data_quality_limitations: str
     comparison_with_prior_observations: str
     recommended_action: str
+    owner_reported_context: list[str] = Field(default_factory=list)
 
 
 class DailyMonitoringReport(BaseModel):
@@ -263,6 +314,7 @@ class DailyMonitoringReport(BaseModel):
     uncertain_observation_count: int = Field(ge=0)
     concerning_observation_ids: list[str] = Field(default_factory=list)
     alert_observation_ids: list[str] = Field(default_factory=list)
+    owner_update_ids: list[str] = Field(default_factory=list)
     narrative: DailyReportNarrative
 
 

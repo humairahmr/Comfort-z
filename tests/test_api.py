@@ -54,6 +54,82 @@ def test_history_endpoint_delegates_to_existing_history_tool(monkeypatch):
     assert response.json() == [{"animal_id": "raku", "limit": 3}]
 
 
+def test_owner_update_endpoints_are_separate_from_monitoring_tools(monkeypatch):
+    received = {}
+
+    def save_owner_update(animal_id, category, occurred_at, note, reading, input_method):
+        received.update(
+            animal_id=animal_id,
+            category=category,
+            occurred_at=occurred_at,
+            note=note,
+            reading=reading,
+            input_method=input_method,
+        )
+        return {"owner_update_id": "update-1", "animal_id": animal_id, "category": category}
+
+    monkeypatch.setattr(api, "record_owner_update", save_owner_update)
+    monkeypatch.setattr(
+        api,
+        "get_recent_owner_updates",
+        lambda animal_id, limit: [{"animal_id": animal_id, "limit": limit, "source": "owner"}],
+    )
+    monkeypatch.setattr(
+        api,
+        "monitor_next_window",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("monitoring must not run")),
+    )
+    monkeypatch.setattr(
+        api,
+        "generate_daily_report",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reporting must not run")),
+    )
+    client = TestClient(api.app)
+
+    created = client.post(
+        "/animals/milo/owner-updates",
+        json={"category": "feeding", "note": "Fed Milo at 8 PM."},
+    )
+    listed = client.get("/animals/milo/owner-updates?limit=7")
+
+    assert created.status_code == 200
+    assert received["animal_id"] == "milo"
+    assert received["category"] == "feeding"
+    assert received["input_method"] == "typed"
+    assert listed.status_code == 200
+    assert listed.json() == [{"animal_id": "milo", "limit": 7, "source": "owner"}]
+
+
+def test_owner_update_endpoint_rejects_malformed_combinations():
+    client = TestClient(api.app)
+
+    missing_reading = client.post("/animals/milo/owner-updates", json={"category": "measurement"})
+    note_with_reading = client.post(
+        "/animals/milo/owner-updates",
+        json={
+            "category": "feeding",
+            "note": "Fed Milo.",
+            "reading": {"reading_type": "water temperature", "value": 27, "unit": "C"},
+        },
+    )
+
+    assert missing_reading.status_code == 422
+    assert note_with_reading.status_code == 422
+
+
+def test_owner_update_unknown_animal_maps_to_not_found(monkeypatch):
+    def missing(*_args, **_kwargs):
+        raise api.MonitoringProfileNotFoundError("internal")
+
+    monkeypatch.setattr(api, "record_owner_update", missing)
+    response = TestClient(api.app).post(
+        "/animals/missing/owner-updates", json={"category": "note", "note": "Owner context."}
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Animal profile was not found."}
+
+
 def test_monitor_endpoint_returns_non_sensitive_storage_error(monkeypatch):
     def unavailable(**_kwargs):
         raise api.ObservationRepositoryError("network details should not reach the client")

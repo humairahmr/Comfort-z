@@ -4,6 +4,7 @@ from comfort_z.models import (
     EnvironmentContext,
     MonitoringProfile,
     MonitorResult,
+    OwnerUpdate,
     Severity,
     StoredObservation,
 )
@@ -21,6 +22,7 @@ def monitor_animal(
     expected_species: str | None = None,
     environment_context: EnvironmentContext | None = None,
     direct_environment_readings: list[DirectEnvironmentReading] | None = None,
+    owner_updates: list[OwnerUpdate] | None = None,
     enclosure_type: str | None = None,
 ) -> dict:
     """Analyze, save, compare, and decide whether a visual observation needs an alert.
@@ -42,6 +44,7 @@ def monitor_animal(
         expected_species=expected_species,
         environment_context=environment_context,
         direct_environment_readings=direct_environment_readings,
+        owner_updates=owner_updates,
     )
     if not visual.animal_visible or visual.observation_status.value != "valid":
         visual = visual.model_copy(update={"severity": Severity.MONITOR})
@@ -55,6 +58,7 @@ def monitor_animal(
         source_info=source_info,
         environment_context=environment_context,
         direct_environment_readings=direct_environment_readings or [],
+        owner_update_ids=[update.owner_update_id for update in owner_updates or []],
         missing_direct_reading_requests=missing_direct_reading_requests(
             environment_context, direct_environment_readings or [], enclosure_type
         ),
@@ -149,4 +153,39 @@ def get_recent_daily_reports(animal_id: str, limit: int = 5) -> list[dict]:
     return [
         report.model_dump(mode="json")
         for report in load_reports(animal_id.strip(), limit=max(1, min(limit, 20)))
+    ]
+
+
+def record_owner_update(
+    animal_id: str,
+    category: str,
+    occurred_at=None,
+    note: str | None = None,
+    reading: DirectEnvironmentReading | None = None,
+    input_method: str = "typed",
+) -> dict:
+    """Persist one owner-provided update without invoking monitoring or Gemini."""
+    from comfort_z.models import OwnerUpdate
+    from comfort_z.services.orchestration import record_owner_update as save_owner_update
+
+    values = {
+        "animal_id": animal_id.strip(),
+        "category": category,
+        "note": note,
+        "reading": reading,
+        "input_method": input_method,
+    }
+    if occurred_at is not None:
+        values["occurred_at"] = occurred_at
+    update = OwnerUpdate(**values)
+    return save_owner_update(update).model_dump(mode="json")
+
+
+def get_recent_owner_updates(animal_id: str, limit: int = 20) -> list[dict]:
+    """Retrieve owner-provided updates without turning them into observations."""
+    from comfort_z.services.orchestration import get_recent_owner_updates as load_owner_updates
+
+    return [
+        update.model_dump(mode="json")
+        for update in load_owner_updates(animal_id.strip(), limit=max(1, min(limit, 50)))
     ]

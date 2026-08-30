@@ -13,7 +13,16 @@ import {
 } from '../state.js';
 import { renderAnimalVisual } from './silhouettes.js';
 
-export function renderDashboard(animalId, profile, observations, reports, navigate, onRefresh) {
+export function renderDashboard(
+  animalId,
+  profile,
+  observations,
+  reports,
+  ownerUpdates,
+  navigate,
+  onRefresh,
+  onOwnerUpdatesRefresh
+) {
   const container = document.createElement('div');
   container.className = 'dashboard-container';
 
@@ -37,6 +46,9 @@ export function renderDashboard(animalId, profile, observations, reports, naviga
 
   // 2. Editorial Animal Profile Hero (The Identity Anchor)
   container.appendChild(createAnimalHero(animalId, profile, latestObs));
+
+  // Owner-provided context is intentionally separate from visual observations.
+  container.appendChild(createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh));
 
   // 3. Editorial Console Workspace
   const consoleLayout = document.createElement('div');
@@ -73,6 +85,187 @@ export function renderDashboard(animalId, profile, observations, reports, naviga
 
   container.appendChild(consoleLayout);
   return container;
+}
+
+function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh) {
+  const section = document.createElement('section');
+  section.className = 'owner-updates-module';
+  section.setAttribute('aria-label', 'Owner-provided care updates');
+
+  const updates = Array.isArray(ownerUpdates) ? ownerUpdates : [];
+  section.innerHTML = `
+    <div class="owner-updates-header">
+      <div>
+        <h2>Care updates</h2>
+        <p>Owner-provided information, kept separate from visual observations.</p>
+      </div>
+      <button type="button" class="btn btn-secondary owner-update-toggle" aria-expanded="false">
+        Add update
+      </button>
+    </div>
+    <form class="owner-update-form" hidden novalidate>
+      <div class="owner-update-fields">
+        <label class="owner-update-field">
+          <span>Type</span>
+          <select name="category">
+            <option value="feeding">Feeding</option>
+            <option value="care">Care</option>
+            <option value="appetite">Appetite</option>
+            <option value="behavior">Behaviour note</option>
+            <option value="availability">Availability</option>
+            <option value="note">General note</option>
+            <option value="measurement">Direct reading</option>
+          </select>
+        </label>
+        <label class="owner-update-field">
+          <span>When it happened</span>
+          <input name="occurred_at" type="datetime-local" required value="${localDateTimeValue()}">
+        </label>
+      </div>
+      <label class="owner-update-field owner-update-note-field">
+        <span>Update</span>
+        <textarea name="note" maxlength="500" placeholder="For example, fed at 8 PM or changed about 30% of the water."></textarea>
+      </label>
+      <div class="owner-update-reading-fields" hidden>
+        <label class="owner-update-field">
+          <span>Reading type</span>
+          <input name="reading_type" maxlength="100" placeholder="For example, water temperature">
+        </label>
+        <label class="owner-update-field">
+          <span>Value</span>
+          <input name="reading_value" type="number" step="any" inputmode="decimal" placeholder="27">
+        </label>
+        <label class="owner-update-field">
+          <span>Unit</span>
+          <input name="reading_unit" maxlength="32" placeholder="°C">
+        </label>
+      </div>
+      <div class="owner-update-actions">
+        <span class="owner-update-message" role="status" aria-live="polite"></span>
+        <button type="submit" class="btn btn-primary">Save update</button>
+      </div>
+    </form>
+    <div class="owner-update-list">
+      ${updates.length === 0
+        ? '<p class="empty-inline">No care updates recorded yet.</p>'
+        : updates.slice(0, 5).map(renderOwnerUpdate).join('')}
+    </div>
+  `;
+
+  const toggle = section.querySelector('.owner-update-toggle');
+  const form = section.querySelector('.owner-update-form');
+  const category = form.elements.category;
+  const noteField = section.querySelector('.owner-update-note-field');
+  const readingFields = section.querySelector('.owner-update-reading-fields');
+  const message = section.querySelector('.owner-update-message');
+  const submit = form.querySelector('[type="submit"]');
+
+  const updateFieldVisibility = () => {
+    const measurement = category.value === 'measurement';
+    noteField.hidden = measurement;
+    readingFields.hidden = !measurement;
+    form.elements.note.required = !measurement;
+    form.elements.reading_type.required = measurement;
+    form.elements.reading_value.required = measurement;
+    form.elements.reading_unit.required = measurement;
+  };
+
+  toggle.addEventListener('click', () => {
+    const willOpen = form.hidden;
+    form.hidden = !willOpen;
+    toggle.setAttribute('aria-expanded', String(willOpen));
+    toggle.textContent = willOpen ? 'Close update form' : 'Add update';
+    if (willOpen) form.elements.category.focus();
+  });
+  category.addEventListener('change', updateFieldVisibility);
+  updateFieldVisibility();
+
+  let saving = false;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (saving) return;
+    const isMeasurement = category.value === 'measurement';
+    const occurredAt = form.elements.occurred_at.value;
+    const note = form.elements.note.value.trim();
+    const readingType = form.elements.reading_type.value.trim();
+    const readingValueText = form.elements.reading_value.value.trim();
+    const readingValue = Number(readingValueText);
+    const readingUnit = form.elements.reading_unit.value.trim();
+
+    if (!occurredAt || (!isMeasurement && !note) || (
+      isMeasurement && (!readingType || !readingValueText || !Number.isFinite(readingValue) || !readingUnit)
+    )) {
+      message.textContent = isMeasurement
+        ? 'Add a reading type, numeric value, and unit.'
+        : 'Add a concise update before saving.';
+      message.dataset.state = 'error';
+      return;
+    }
+
+    const payload = {
+      category: category.value,
+      occurred_at: new Date(occurredAt).toISOString(),
+    };
+    if (isMeasurement) {
+      payload.reading = { reading_type: readingType, value: readingValue, unit: readingUnit };
+    } else {
+      payload.note = note;
+    }
+
+    saving = true;
+    submit.disabled = true;
+    message.textContent = 'Saving owner update…';
+    message.dataset.state = 'pending';
+    try {
+      await api.createOwnerUpdate(animalId, payload);
+      message.textContent = 'Saved. Refreshing care updates…';
+      message.dataset.state = 'success';
+      if (typeof onOwnerUpdatesRefresh === 'function') {
+        await onOwnerUpdatesRefresh();
+      }
+    } catch (error) {
+      message.textContent = error.message || 'Unable to save this update.';
+      message.dataset.state = 'error';
+      saving = false;
+      submit.disabled = false;
+    }
+  });
+
+  return section;
+}
+
+function renderOwnerUpdate(update) {
+  const reading = update.reading;
+  const detail = reading
+    ? `${escapeHtml(reading.reading_type)}: ${escapeHtml(String(reading.value))} ${escapeHtml(reading.unit)}`
+    : escapeHtml(update.note || 'Owner-provided update.');
+  return `
+    <article class="owner-update-item">
+      <div>
+        <strong>${escapeHtml(ownerUpdateLabel(update.category))}</strong>
+        <p>${detail}</p>
+      </div>
+      <time datetime="${escapeHtml(update.occurred_at || '')}">${escapeHtml(formatTimestamp(update.occurred_at))}</time>
+    </article>
+  `;
+}
+
+function ownerUpdateLabel(category) {
+  const labels = {
+    measurement: 'Direct reading',
+    feeding: 'Feeding',
+    care: 'Care',
+    appetite: 'Appetite',
+    behavior: 'Behaviour note',
+    availability: 'Availability',
+    note: 'Owner note',
+  };
+  return labels[category] || 'Owner update';
+}
+
+function localDateTimeValue(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 /**
@@ -676,6 +869,9 @@ function createReportsModule(animalId, profile, reports, onRefresh) {
       const card = document.createElement('div');
       card.className = 'report-card';
       const narrative = r.narrative || {};
+      const ownerContext = Array.isArray(narrative.owner_reported_context)
+        ? narrative.owner_reported_context
+        : [];
       card.innerHTML = `
         <div class="report-card-header">
           <span>24h Report • ${formatTimestamp(r.generated_at)}</span>
@@ -687,6 +883,11 @@ function createReportsModule(animalId, profile, reports, onRefresh) {
         <div style="font-size: var(--font-size-label); color: var(--color-text-muted);">
           Concerning: ${(r.concerning_observation_ids || []).length} • Alerts: ${(r.alert_observation_ids || []).length}
         </div>
+        ${ownerContext.length > 0 ? `
+          <div style="margin-top: 9px; color: var(--color-text-secondary); font-size: .72rem; line-height: 1.45;">
+            <strong>Owner-provided context:</strong> ${escapeHtml(ownerContext.join(' '))}
+          </div>
+        ` : ''}
       `;
       module.appendChild(card);
     });

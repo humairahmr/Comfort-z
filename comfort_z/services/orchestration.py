@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 from comfort_z.models import (
     DailyMonitoringReport,
     DailyReportNarrative,
+    DirectEnvironmentReading,
     MonitoringProfile,
     MonitoringWindowResult,
     ObservationStatus,
+    OwnerUpdate,
     SamplingMode,
 )
 from comfort_z.services.analyzer import GeminiDailyReportGenerator
@@ -30,10 +32,19 @@ from comfort_z.services.video import VideoMonitoringService
 
 DEFAULT_WINDOW_MAX_SAMPLES = 2
 MAX_WINDOW_MAX_SAMPLES = 10
+OWNER_CONTEXT_MAX_UPDATES = 8
+OWNER_CONTEXT_MAX_MEASUREMENTS = 4
+OWNER_CONTEXT_CANDIDATE_LIMIT = 32
+OWNER_CONTEXT_MAX_AGE = timedelta(days=7)
+DAILY_REPORT_MAX_OWNER_UPDATES = 30
 
 
 class MonitoringSourceNotConnectedError(ValueError):
     """Raised when an operation needs a source that the profile does not have."""
+
+
+class MonitoringProfileNotFoundError(ValueError):
+    """Raised when an owner-context request names no saved animal profile."""
 
 
 class DailyReportGenerator(Protocol):
@@ -58,6 +69,36 @@ def create_or_update_monitoring_profile(
         }
     )
     return repository.save_profile(saved)
+
+
+def record_owner_update(
+    update: OwnerUpdate,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+) -> OwnerUpdate:
+    """Persist one owner update without touching monitoring profile state or running AI."""
+    state = state_repository or get_monitoring_state_repository()
+    if state.get_profile(update.animal_id) is None:
+        raise MonitoringProfileNotFoundError(
+            f"No monitoring profile exists for animal {update.animal_id!r}."
+        )
+    return state.save_owner_update(update)
+
+
+def get_recent_owner_updates(
+    animal_id: str,
+    limit: int = 20,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+) -> list[OwnerUpdate]:
+    """Return owner-provided history only; never synthesize it as an observation."""
+    state = state_repository or get_monitoring_state_repository()
+    clean_animal_id = animal_id.strip()
+    if state.get_profile(clean_animal_id) is None:
+        raise MonitoringProfileNotFoundError(
+            f"No monitoring profile exists for animal {animal_id!r}."
+        )
+    return state.recent_owner_updates(clean_animal_id, max(1, min(limit, 50)))
 
 
 def monitor_next_window(
@@ -99,6 +140,16 @@ def monitor_next_window(
         else profile.normal_sampling_interval_seconds
     )
     service = video_service or VideoMonitoringService()
+    owner_context_candidates = state.owner_updates_for_period(
+        profile.animal_id,
+        timestamp - OWNER_CONTEXT_MAX_AGE,
+        timestamp,
+        limit=OWNER_CONTEXT_CANDIDATE_LIMIT,
+    )
+    owner_updates = owner_context_candidates[:OWNER_CONTEXT_MAX_UPDATES]
+    direct_environment_readings = _direct_readings_for_monitoring(
+        profile, owner_context_candidates
+    )
     environment_context = _environment_context_for_profile(profile, environment_provider)
     with source_resolver(profile.source_reference) as resolved_source:
         session = service.monitor(
@@ -110,7 +161,8 @@ def monitor_next_window(
             animal_name=profile.animal_name,
             expected_species=profile.expected_species,
             environment_context=environment_context,
-            direct_environment_readings=profile.direct_environment_readings,
+            direct_environment_readings=direct_environment_readings,
+            owner_updates=owner_updates,
             enclosure_type=profile.enclosure_type,
             # Legacy profiles resume by timestamp once; new runs persist a deterministic frame cursor.
             start_at_seconds=(
@@ -195,6 +247,12 @@ def generate_daily_report(
         for item in full_history
         if item.timestamp < period_start and is_valid_animal_observation(item)
     ][:3]
+    owner_updates = state.owner_updates_for_period(
+        profile.animal_id,
+        period_start,
+        period_end,
+        limit=DAILY_REPORT_MAX_OWNER_UPDATES,
+    )
     structured_history = {
         "animal": {
             "animal_id": profile.animal_id,
@@ -216,6 +274,17 @@ def generate_daily_report(
         "prior_valid_observations": [_observation_summary(item) for item in prior_valid],
         "concerning_observation_ids": [item.observation_id for item in concerning],
         "alert_observation_ids": [item.observation_id for item in alerts],
+        "owner_reported_context": [
+            {
+                "owner_update_id": update.owner_update_id,
+                "category": update.category.value,
+                "occurred_at": update.occurred_at.isoformat(),
+                "note": update.note,
+                "reading": update.reading.model_dump(mode="json") if update.reading else None,
+                "source": update.source,
+            }
+            for update in owner_updates
+        ],
     }
     narrative = (report_generator or GeminiDailyReportGenerator()).generate(structured_history)
     report = DailyMonitoringReport(
@@ -230,6 +299,7 @@ def generate_daily_report(
         uncertain_observation_count=len(uncertain),
         concerning_observation_ids=[item.observation_id for item in concerning],
         alert_observation_ids=[item.observation_id for item in alerts],
+        owner_update_ids=[update.owner_update_id for update in owner_updates],
         narrative=narrative,
     )
     return state.save_report(report)
@@ -326,6 +396,7 @@ def _observation_summary(observation) -> dict:
             reading.model_dump(mode="json")
             for reading in observation.direct_environment_readings
         ],
+        "owner_update_ids": observation.owner_update_ids,
         "missing_direct_reading_requests": observation.missing_direct_reading_requests,
         "research_context": (
             observation.research_context.model_dump(mode="json")
@@ -333,6 +404,19 @@ def _observation_summary(observation) -> dict:
             else None
         ),
     }
+
+
+def _direct_readings_for_monitoring(
+    profile: MonitoringProfile,
+    owner_updates: list[OwnerUpdate],
+) -> list[DirectEnvironmentReading]:
+    """Keep legacy profile readings while adding a small, recent owner-measurement set."""
+    owner_measurements = [
+        update.reading
+        for update in owner_updates
+        if update.reading is not None
+    ][:OWNER_CONTEXT_MAX_MEASUREMENTS]
+    return [*profile.direct_environment_readings, *owner_measurements]
 
 
 def _environment_context_for_profile(

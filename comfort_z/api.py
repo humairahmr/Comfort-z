@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from datetime import datetime
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
@@ -13,16 +15,26 @@ from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from comfort_z.agent import root_agent
-from comfort_z.models import DirectEnvironmentReading, MonitoringProfile, MonitoringSourceType
+from comfort_z.models import (
+    DirectEnvironmentReading,
+    MonitoringProfile,
+    MonitoringSourceType,
+    OwnerUpdateCategory,
+)
 from comfort_z.services.repository import ObservationRepositoryError, get_monitoring_state_repository
-from comfort_z.services.orchestration import MonitoringSourceNotConnectedError
+from comfort_z.services.orchestration import (
+    MonitoringProfileNotFoundError,
+    MonitoringSourceNotConnectedError,
+)
 from comfort_z.tools.monitoring import (
     create_monitoring_profile,
     generate_daily_report,
     get_recent_daily_reports,
     get_recent_observations,
+    get_recent_owner_updates,
     monitor_animal,
     monitor_next_window,
+    record_owner_update,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,9 +93,35 @@ class NextWindowRequest(BaseModel):
     window_max_samples: int = Field(default=2, ge=1, le=10)
 
 
+class OwnerUpdateRequest(BaseModel):
+    """Typed owner context only; voice can use the same domain model later."""
+
+    category: OwnerUpdateCategory
+    occurred_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=500)
+    reading: DirectEnvironmentReading | None = None
+    input_method: Literal["typed"] = "typed"
+
+    @model_validator(mode="after")
+    def validate_update_shape(self) -> "OwnerUpdateRequest":
+        note = self.note.strip() if self.note else None
+        if self.category == OwnerUpdateCategory.MEASUREMENT:
+            if self.reading is None:
+                raise ValueError("measurement updates require a direct reading.")
+            return self
+        if self.reading is not None:
+            raise ValueError("only measurement updates may include a direct reading.")
+        if not note:
+            raise ValueError("non-measurement updates require a non-empty note.")
+        self.note = note
+        return self
+
+
 def _workflow_http_error(error: Exception) -> HTTPException:
     """Return actionable but non-sensitive workflow failures to API callers."""
     logger.warning("Comfort-z workflow request failed: %s", type(error).__name__)
+    if isinstance(error, MonitoringProfileNotFoundError):
+        return HTTPException(status_code=404, detail="Animal profile was not found.")
     if isinstance(error, MonitoringSourceNotConnectedError):
         return HTTPException(status_code=409, detail="Monitoring source is not connected.")
     if isinstance(error, (ValueError, FileNotFoundError)):
@@ -155,6 +193,35 @@ async def recent_observations(
     """Expose the existing repository-backed history tool without duplicating it."""
     try:
         return await run_in_threadpool(get_recent_observations, animal_id, limit)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+
+
+@app.post("/animals/{animal_id}/owner-updates")
+async def create_owner_update(animal_id: str, request: OwnerUpdateRequest) -> dict:
+    """Save owner-provided care context without invoking monitoring or Gemini."""
+    try:
+        return await run_in_threadpool(
+            record_owner_update,
+            animal_id,
+            request.category.value,
+            request.occurred_at,
+            request.note,
+            request.reading,
+            request.input_method,
+        )
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+
+
+@app.get("/animals/{animal_id}/owner-updates")
+async def recent_owner_updates(
+    animal_id: str,
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[dict]:
+    """Return owner-provided context separately from Gemini observation history."""
+    try:
+        return await run_in_threadpool(get_recent_owner_updates, animal_id, limit)
     except Exception as error:
         raise _workflow_http_error(error) from error
 

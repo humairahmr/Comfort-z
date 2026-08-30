@@ -16,6 +16,7 @@ import cv2
 from comfort_z.models import (
     DirectEnvironmentReading,
     EnvironmentContext,
+    OwnerUpdate,
     VideoFrameSample,
     VideoMonitoringSession,
 )
@@ -57,6 +58,7 @@ class VideoMonitoringService:
         source_label: str | None = None,
         environment_context: EnvironmentContext | None = None,
         direct_environment_readings: list[DirectEnvironmentReading] | None = None,
+        owner_updates: list[OwnerUpdate] | None = None,
         enclosure_type: str | None = None,
         start_frame_index: int = 0,
     ) -> VideoMonitoringSession:
@@ -230,6 +232,7 @@ class VideoMonitoringService:
                         stop_retry_delay_seconds=stop_retry_delay_seconds,
                         environment_context=environment_context,
                         direct_environment_readings=direct_environment_readings or [],
+                        owner_updates=owner_updates or [],
                         enclosure_type=enclosure_type,
                     )
                     if failure:
@@ -333,6 +336,7 @@ class VideoMonitoringService:
         stop_retry_delay_seconds: float,
         environment_context: EnvironmentContext | None,
         direct_environment_readings: list[DirectEnvironmentReading],
+        owner_updates: list[OwnerUpdate],
         enclosure_type: str | None,
     ) -> tuple[dict[str, Any] | None, str | None, str | None]:
         """Retry only one transient Gemini failure class for this one frame."""
@@ -347,6 +351,7 @@ class VideoMonitoringService:
                         expected_species=expected_species,
                         environment_context=environment_context,
                         direct_environment_readings=direct_environment_readings,
+                        owner_updates=owner_updates,
                         enclosure_type=enclosure_type,
                     ),
                     None,
