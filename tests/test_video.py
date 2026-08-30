@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from comfort_z.services.video import VideoMonitoringService
+import pytest
+
+from comfort_z.services.video import CameraCaptureError, VideoMonitoringService
 
 
 class FakeCapture:
@@ -46,6 +48,30 @@ class FakeCv2:
     def imwrite(self, path: str, _frame):
         Path(path).write_bytes(b"fake-jpeg")
         return True
+
+    def imencode(self, _extension, _frame):
+        class Encoded:
+            def tobytes(self):
+                return b"\xff\xd8preview-jpeg\xff\xd9"
+
+        return True, Encoded()
+
+
+class SequenceCv2(FakeCv2):
+    def __init__(self, captures):
+        self.captures = iter(captures)
+
+    def VideoCapture(self, _source):
+        return next(self.captures)
+
+
+class FakeImageFrame:
+    def __init__(self, maximum: float):
+        self.size = 12
+        self._maximum = maximum
+
+    def max(self):
+        return self._maximum
 
 
 class TransientGeminiError(RuntimeError):
@@ -110,6 +136,161 @@ def test_invalid_video_and_unavailable_webcam_end_safely(tmp_path):
 
     assert missing.ended_reason == "invalid_source"
     assert webcam.ended_reason == "source_unavailable"
+
+
+def test_webcam_warmup_discards_startup_frames_and_uses_a_later_usable_frame():
+    black = FakeImageFrame(0)
+    valid = FakeImageFrame(32)
+    capture = FakeCapture([black, black, black, black, valid], [0, 0, 0, 0, 0])
+    calls = []
+    service = VideoMonitoringService(
+        monitoring_tool=lambda **kwargs: calls.append(kwargs) or {"decision": {}},
+        cv2_module=FakeCv2(capture),
+    )
+
+    session = service.monitor("milo", 1, max_samples=1)
+
+    assert len(calls) == 1
+    assert session.attempted_samples == 1
+    assert session.samples[0].frame_index == 5
+    assert "position=live" in calls[0]["source_info"]
+    assert capture.released
+
+
+def test_all_black_webcam_frames_stop_without_a_gemini_attempt():
+    capture = FakeCapture([FakeImageFrame(0)] * 7, [0] * 7)
+    calls = []
+    service = VideoMonitoringService(
+        monitoring_tool=lambda **kwargs: calls.append(kwargs) or {"decision": {}},
+        cv2_module=FakeCv2(capture),
+    )
+
+    session = service.monitor("milo", 1, max_samples=1)
+
+    assert calls == []
+    assert session.attempted_samples == 0
+    assert session.ended_reason == "unusable_frame"
+    assert "effectively black" in session.failures[0]
+    assert capture.released
+
+
+def test_webcam_snapshot_uses_warmup_and_never_calls_monitoring_tool():
+    capture = FakeCapture([FakeImageFrame(0)] * 3 + [FakeImageFrame(48)], [0] * 4)
+    service = VideoMonitoringService(
+        monitoring_tool=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not monitor")),
+        cv2_module=FakeCv2(capture),
+    )
+
+    assert service.capture_webcam_snapshot(1) == b"\xff\xd8preview-jpeg\xff\xd9"
+    assert capture.released
+
+
+def test_webcam_snapshot_failed_read_is_a_controlled_error_and_releases_capture():
+    capture = FakeCapture([], [])
+    service = VideoMonitoringService(cv2_module=FakeCv2(capture))
+
+    with pytest.raises(CameraCaptureError, match="bounded retries"):
+        service.capture_webcam_snapshot(0)
+
+    assert capture.released
+
+
+def test_webcam_snapshot_reopens_once_after_a_transient_failure_then_succeeds():
+    first = FakeCapture([], [], opened=False)
+    second = FakeCapture([FakeImageFrame(48)] * 4, [0] * 4)
+    service = VideoMonitoringService(cv2_module=SequenceCv2([first, second]))
+
+    jpeg = service.capture_webcam_snapshot(1)
+
+    assert jpeg == b"\xff\xd8preview-jpeg\xff\xd9"
+    assert first.released
+    assert second.released
+
+
+def test_webcam_snapshot_returns_controlled_error_when_both_fresh_attempts_fail():
+    first = FakeCapture([], [], opened=False)
+    second = FakeCapture([FakeImageFrame(0)] * 7, [0] * 7)
+    service = VideoMonitoringService(cv2_module=SequenceCv2([first, second]))
+
+    with pytest.raises(CameraCaptureError, match="bounded retries"):
+        service.capture_webcam_snapshot(1)
+
+    assert first.released
+    assert second.released
+
+
+def test_webcam_snapshot_rejects_black_frame_and_never_returns_jpeg():
+    capture = FakeCapture([FakeImageFrame(0)] * 7, [0] * 7)
+    service = VideoMonitoringService(cv2_module=FakeCv2(capture))
+
+    with pytest.raises(CameraCaptureError, match="bounded retries"):
+        service.capture_webcam_snapshot(0)
+
+    assert capture.released
+
+
+def test_webcam_snapshot_rejects_invalid_jpeg_output():
+    class InvalidEncodingCv2(FakeCv2):
+        def imencode(self, _extension, _frame):
+            class Encoded:
+                def tobytes(self):
+                    return b"not-a-jpeg"
+
+            return True, Encoded()
+
+    capture = FakeCapture([FakeImageFrame(48)] * 4, [0] * 4)
+    service = VideoMonitoringService(cv2_module=InvalidEncodingCv2(capture))
+
+    with pytest.raises(CameraCaptureError, match="bounded retries"):
+        service.capture_webcam_snapshot(0)
+
+    assert capture.released
+
+
+def test_webcam_snapshot_read_timeout_releases_capture_and_returns_controlled_error():
+    class BlockingCapture(FakeCapture):
+        def __init__(self):
+            super().__init__([], [])
+            from threading import Event
+
+            self.unblock = Event()
+
+        def read(self):
+            self.unblock.wait(1)
+            return False, None
+
+        def release(self):
+            self.released = True
+            self.unblock.set()
+
+    capture = BlockingCapture()
+    service = VideoMonitoringService(cv2_module=FakeCv2(capture))
+
+    with pytest.raises(CameraCaptureError, match="bounded retries"):
+        service.capture_webcam_snapshot(0, timeout_seconds=0.01)
+
+    assert capture.released
+
+
+def test_windows_webcam_prefers_directshow_before_default_fallback(monkeypatch):
+    class DirectShowCv2(FakeCv2):
+        CAP_DSHOW = 700
+
+        def __init__(self, capture):
+            super().__init__(capture)
+            self.open_calls = []
+
+        def VideoCapture(self, *args):
+            self.open_calls.append(args)
+            return self.capture
+
+    capture = FakeCapture([FakeImageFrame(48)] * 4, [0] * 4)
+    cv2_module = DirectShowCv2(capture)
+    monkeypatch.setattr("comfort_z.services.video.platform.system", lambda: "Windows")
+
+    VideoMonitoringService(cv2_module=cv2_module).capture_webcam_snapshot(2)
+
+    assert cv2_module.open_calls == [(2, 700)]
 
 
 def test_stop_ends_a_session_normally(tmp_path):

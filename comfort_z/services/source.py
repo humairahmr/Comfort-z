@@ -9,6 +9,8 @@ from tempfile import NamedTemporaryFile
 from typing import Callable, Iterator
 from urllib.parse import urlsplit
 
+from comfort_z.services.media import MediaStorageError, get_local_media_store, is_uploaded_video_reference
+
 
 class VideoSourceResolutionError(RuntimeError):
     """A safe domain-level failure while materializing a video source."""
@@ -87,6 +89,13 @@ def resolve_video_source(
     temporary file, which is deleted after the caller's bounded operation.
     """
     if not is_google_cloud_storage_uri(source_reference):
+        if is_uploaded_video_reference(source_reference):
+            try:
+                local_path = get_local_media_store().resolve(source_reference)
+            except MediaStorageError as error:
+                raise VideoSourceResolutionError("Uploaded video source is not available.") from error
+            yield ResolvedVideoSource(local_source=str(local_path), source_label="uploaded video")
+            return
         yield ResolvedVideoSource(local_source=source_reference)
         return
 

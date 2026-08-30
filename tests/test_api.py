@@ -3,6 +3,7 @@ import pytest
 
 from comfort_z import api
 from comfort_z.models import VoiceOwnerUpdateDraftResponse
+from comfort_z.services.video import VideoMonitoringService
 
 
 def test_health_reports_agent_model_and_configured_store(monkeypatch):
@@ -403,3 +404,90 @@ def test_demo_video_handles_missing_safely():
     response = client.get("/demo-video/non_existent_video_file.mp4")
     assert response.status_code == 404
     assert response.json()["detail"] == "Demo video not available."
+
+
+def test_camera_preview_endpoint_is_narrow_and_does_not_invoke_monitoring(monkeypatch):
+    jpeg = b"\xff\xd8preview\xff\xd9"
+    monkeypatch.setattr(api, "capture_local_camera_preview", lambda index: jpeg if index == 1 else (_ for _ in ()).throw(AssertionError("unexpected index")))
+    monkeypatch.setattr(api, "is_usable_jpeg_bytes", lambda value: value == jpeg)
+    monkeypatch.setattr(api, "monitor_next_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not monitor")))
+    monkeypatch.setattr(api, "get_monitoring_state_repository", lambda: (_ for _ in ()).throw(AssertionError("must not load or mutate profile state")))
+    client = TestClient(api.app)
+
+    response = client.post("/monitoring/camera-preview", json={"camera_index": 1})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.content == jpeg
+    assert client.post("/monitoring/camera-preview", json={"camera_index": "1"}).status_code == 422
+
+
+def test_camera_preview_unavailable_is_controlled(monkeypatch):
+    def unavailable(_index):
+        raise api.CameraCaptureError("private camera detail")
+
+    monkeypatch.setattr(api, "capture_local_camera_preview", unavailable)
+    response = TestClient(api.app).post("/monitoring/camera-preview", json={"camera_index": 0})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Camera preview is unavailable. Check the local camera and try again."}
+
+
+def test_camera_preview_endpoint_returns_jpeg_after_one_internal_capture_retry(monkeypatch):
+    class Capture:
+        def __init__(self, frames, opened=True):
+            self.frames = iter(frames)
+            self.opened = opened
+            self.released = False
+
+        def isOpened(self):
+            return self.opened
+
+        def read(self):
+            try:
+                return True, next(self.frames)
+            except StopIteration:
+                return False, None
+
+        def release(self):
+            self.released = True
+
+    class Frame:
+        size = 1
+
+        def max(self):
+            return 48
+
+    class Cv2:
+        def __init__(self):
+            self.captures = iter([Capture([], opened=False), Capture([Frame()] * 4)])
+
+        def VideoCapture(self, _index):
+            return next(self.captures)
+
+        def imencode(self, _extension, _frame):
+            class Encoded:
+                def tobytes(self):
+                    return b"\xff\xd8preview\xff\xd9"
+
+            return True, Encoded()
+
+    service = VideoMonitoringService(cv2_module=Cv2())
+    jpeg = b"\xff\xd8preview\xff\xd9"
+    monkeypatch.setattr(api, "capture_local_camera_preview", lambda index: service.capture_webcam_snapshot(index))
+    monkeypatch.setattr(api, "is_usable_jpeg_bytes", lambda value: value == jpeg)
+
+    response = TestClient(api.app).post("/monitoring/camera-preview", json={"camera_index": 1})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.content == jpeg
+
+
+def test_camera_preview_rejects_empty_or_invalid_jpeg_even_when_capture_returns(monkeypatch):
+    monkeypatch.setattr(api, "capture_local_camera_preview", lambda _index: b"\xff\xd8not-decodable\xff\xd9")
+
+    response = TestClient(api.app).post("/monitoring/camera-preview", json={"camera_index": 0})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Camera preview is unavailable. Check the local camera and try again."}

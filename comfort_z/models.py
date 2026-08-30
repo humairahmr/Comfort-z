@@ -295,10 +295,13 @@ class MonitoringProfile(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     enclosure_type: str | None = None
+    # Opaque server-managed local/demo media reference; API responses expose a safe URL instead.
+    profile_photo_reference: str | None = None
     direct_environment_readings: list[DirectEnvironmentReading] = Field(default_factory=list)
     monitoring_goal: str = Field(min_length=1)
     source_reference: str | int | None = None
     source_type: MonitoringSourceType | None = None
+    source_display_name: str | None = None
     normal_sampling_interval_seconds: float = Field(gt=0)
     elevated_sampling_interval_seconds: float = Field(gt=0)
     current_sampling_mode: SamplingMode = SamplingMode.NORMAL

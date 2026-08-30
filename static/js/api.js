@@ -182,6 +182,66 @@ export class ApiClient {
     if (!animalId) throw new Error('Animal ID is required to pause monitoring.');
     return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/pause`, { method: 'POST' });
   }
+
+  async previewLocalCamera(cameraIndex) {
+    if (!Number.isInteger(cameraIndex) || cameraIndex < 0) {
+      throw new Error('Enter a whole camera index of 0 or higher.');
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${this.baseUrl}/monitoring/camera-preview`, {
+        method: 'POST',
+        headers: { 'Accept': 'image/jpeg', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_index: cameraIndex }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try { detail = (await response.json()).detail || detail; } catch (_) { /* non-JSON failure */ }
+        throw new Error(detail);
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.toLowerCase().startsWith('image/jpeg')) {
+        throw new Error('Camera preview did not return a JPEG image.');
+      }
+      const blob = await response.blob();
+      if (!blob || blob.size <= 4) throw new Error('Camera preview image was empty.');
+      if (blob.type && !blob.type.toLowerCase().startsWith('image/jpeg')) {
+        throw new Error('Camera preview image was not a JPEG.');
+      }
+      return blob;
+    } catch (error) {
+      if (error && error.name === 'AbortError') {
+        throw new Error('Camera preview timed out. Check the camera and try again.');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async uploadProfilePhoto(animalId, photo) {
+    if (!animalId) throw new Error('Animal ID is required to upload a profile photo.');
+    if (!photo || (typeof File !== 'undefined' && !(photo instanceof File))) {
+      throw new Error('Choose an image file first.');
+    }
+    return this.fetchForm(`/animals/${encodeURIComponent(animalId)}/profile-photo`, 'photo', photo);
+  }
+
+  async uploadMonitoringVideo(animalId, video) {
+    if (!animalId) throw new Error('Animal ID is required to upload a monitoring video.');
+    if (!video || (typeof File !== 'undefined' && !(video instanceof File))) {
+      throw new Error('Choose a video file first.');
+    }
+    return this.fetchForm(`/monitoring/${encodeURIComponent(animalId)}/video-source`, 'video', video);
+  }
+
+  async fetchForm(endpoint, fieldName, file) {
+    const form = new FormData();
+    form.append(fieldName, file, file.name);
+    return this.fetchJson(endpoint, { method: 'POST', body: form });
+  }
 }
 
 export const api = new ApiClient();

@@ -98,6 +98,12 @@ Grant the runtime service account the bucket-scoped Storage Object Viewer role (
 
 For local development, monitoring profiles and reports are stored in `data/monitoring_state.json`; set `LOCAL_MONITORING_STATE_FILE` to use another ignored path. With `OBSERVATION_STORE=firestore`, profiles use `animals/{animal_id}/monitoring/profile` and reports use `animals/{animal_id}/reports/{report_id}`. No credentials are stored in either repository.
 
+### Local owner media uploads
+
+The owner interface can save an optional profile photo (`JPEG`, `PNG`, or `WebP`, up to 5 MiB) and connect one uploaded monitoring video (`MP4`, `WebM`, or `MOV`, up to 100 MiB). The application gives each upload a server-generated reference under the ignored local media directory `data/media` (override with `LOCAL_MEDIA_DIR`); it never saves or shows an owner-supplied filesystem path. A video upload changes only that profile's single source, resets its source cursor, and leaves it paused until the owner starts monitoring. Uploading either kind of media never starts Gemini analysis.
+
+This local/demo store is intentionally not durable on Cloud Run: container files can disappear whenever an instance is replaced. A deployed version needs a durable, private Cloud Storage-backed media-store implementation before owner uploads should be enabled there. Existing private `gs://` video sources remain a separate developer/deployment integration and are not exposed in the owner interface.
+
 Create a Raku video profile through the API:
 
 ```powershell

@@ -12,6 +12,7 @@ import {
   formatConfidence,
 } from '../state.js';
 import { renderAnimalVisual } from './silhouettes.js';
+import { createCameraPreviewController, createCameraPreviewState } from './camera-preview.mjs';
 import { createVoiceUpdatePanel } from './voice-update.js';
 import {
   formatDirectReadingValue,
@@ -33,6 +34,7 @@ import {
   monitoringStatusText,
   profileSpeciesLabel,
   sourceDisplayLabel,
+  sourceSamplingDetail,
 } from './monitoring-state.mjs';
 
 export function renderDashboard(
@@ -372,12 +374,13 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   const lifecycle = monitoringLifecycleState(profile);
   const actions = lifecycleActions(profile);
   const cameraIndex = profile && profile.source_type === 'webcam' ? profile.source_reference : 0;
+  const initialSourceMode = profile && profile.source_type === 'video' ? 'video' : 'camera';
   section.innerHTML = `
     <div class="monitoring-lifecycle-copy">
       <h2>${monitoringStatusText(profile)}</h2>
       <p>${lifecycle === 'source_not_connected'
-        ? 'Connect a camera before Comfort-z can collect visual observations.'
-        : `${escapeHtml(sourceDisplayLabel(profile))}. ${lifecycle === 'active' ? 'Bounded observation windows are enabled.' : 'Start monitoring when you are ready to collect observations.'}`}</p>
+        ? 'Connect a monitoring source before Comfort-z can collect visual observations.'
+        : `${escapeHtml(sourceSamplingDetail(profile))}. ${lifecycle === 'active' ? 'Bounded observation windows are enabled.' : 'Start monitoring when you are ready to collect observations.'}`}</p>
     </div>
     <div class="monitoring-lifecycle-actions">
       ${actions.includes('connect') ? '<button type="button" class="btn btn-primary" data-connect>Connect source</button>' : ''}
@@ -385,26 +388,149 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
       ${actions.includes('pause') ? '<button type="button" class="btn btn-secondary" data-pause>Pause monitoring</button>' : ''}
       ${actions.includes('change') ? '<button type="button" class="btn btn-secondary" data-change>Change source</button>' : ''}
       ${actions.includes('disconnect') ? '<button type="button" class="btn btn-secondary" data-disconnect>Disconnect</button>' : ''}
+      ${profile && profile.source_type === 'webcam' ? '<button type="button" class="btn btn-secondary" data-preview>Preview camera</button>' : ''}
+      <label class="profile-photo-action btn btn-secondary">
+        Change profile photo
+        <input type="file" data-profile-photo accept="image/jpeg,image/png,image/webp">
+      </label>
     </div>
     <form class="connect-camera-form" hidden novalidate>
       <div>
-        <strong>Connect a local camera</strong>
-        <p>Use a camera available to the computer running Comfort-z. Local cameras are not available to Cloud Run.</p>
+        <strong>Connect monitoring source</strong>
+        <p>Choose a live camera on this computer or upload one video for bounded monitoring. Uploading does not start monitoring.</p>
       </div>
-      <label>Camera index <input name="camera_index" type="number" min="0" step="1" required value="${escapeHtml(cameraIndex)}"></label>
+      <div class="source-mode-picker" role="group" aria-label="Monitoring source type">
+        <button type="button" class="source-mode-option" data-source-mode="camera" aria-pressed="false">Live camera</button>
+        <button type="button" class="source-mode-option" data-source-mode="video" aria-pressed="false">Video file</button>
+      </div>
+      <label class="camera-source-fields">Camera index <input name="camera_index" type="number" min="0" step="1" required value="${escapeHtml(cameraIndex)}"></label>
+      <label class="video-source-fields" hidden>
+        <span>Choose video</span>
+        <input name="monitoring_video" type="file" accept="video/mp4,video/webm,video/quicktime">
+        <small class="video-source-filename">No video selected.</small>
+      </label>
       <div class="connect-camera-actions">
         <span class="connect-camera-message" role="status" aria-live="polite"></span>
+        <button type="button" class="btn btn-secondary" data-preview>Preview camera</button>
         <button type="button" class="btn btn-secondary" data-cancel-connect>Cancel</button>
         <button type="submit" class="btn btn-primary">Connect camera</button>
       </div>
     </form>
+    <div class="camera-preview" hidden></div>
   `;
   const form = section.querySelector('.connect-camera-form');
   const message = section.querySelector('.connect-camera-message');
-  const openConnect = () => { form.hidden = false; form.elements.camera_index.focus(); };
+  const preview = section.querySelector('.camera-preview');
+  const cameraFields = section.querySelector('.camera-source-fields');
+  const videoFields = section.querySelector('.video-source-fields');
+  const videoInput = form.elements.monitoring_video;
+  const videoFilename = section.querySelector('.video-source-filename');
+  const sourceOptions = section.querySelectorAll('[data-source-mode]');
+  const sourcePreviewButtons = section.querySelectorAll('[data-preview]');
+  const sourceSubmit = form.querySelector('[type="submit"]');
+  let sourceMode = initialSourceMode;
+  const setSourceMode = (mode) => {
+    sourceMode = mode;
+    const usingCamera = mode === 'camera';
+    cameraFields.hidden = !usingCamera;
+    videoFields.hidden = usingCamera;
+    form.elements.camera_index.required = usingCamera;
+    videoInput.required = !usingCamera;
+    sourcePreviewButtons.forEach((button) => { button.hidden = !usingCamera; });
+    sourceOptions.forEach((option) => {
+      const selected = option.dataset.sourceMode === mode;
+      option.classList.toggle('is-selected', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    });
+    sourceSubmit.textContent = usingCamera ? 'Connect camera' : 'Upload video';
+    message.textContent = '';
+  };
+  let previewState;
+  const renderPreview = (snapshot) => {
+    const hasImage = Boolean(snapshot.url);
+    const isLoading = snapshot.status === 'loading';
+    preview.hidden = !hasImage && snapshot.status !== 'loading';
+    preview.dataset.status = snapshot.status;
+    preview.setAttribute('aria-busy', String(isLoading));
+    sourcePreviewButtons.forEach((button) => {
+      button.disabled = isLoading;
+      button.textContent = hasImage ? 'Refresh preview' : 'Preview camera';
+    });
+    preview.replaceChildren();
+    if (preview.hidden) return;
+
+    const heading = document.createElement('div');
+    heading.className = 'camera-preview-heading';
+    heading.innerHTML = '<strong>Camera preview</strong><span>Snapshot only — monitoring samples the camera during observation windows.</span>';
+    preview.appendChild(heading);
+
+    if (!hasImage) return;
+    const media = document.createElement('div');
+    media.className = 'camera-preview-media';
+    const image = document.createElement('img');
+    image.alt = 'Recent local camera snapshot';
+    if (snapshot.pendingUrl === snapshot.url) {
+      image.addEventListener('load', () => {
+        previewState.imageLoaded(snapshot.url);
+      }, { once: true });
+      image.addEventListener('error', () => previewState.imageFailed(snapshot.url), { once: true });
+    }
+    image.src = snapshot.url;
+    media.appendChild(image);
+    if (isLoading) {
+      const loading = document.createElement('div');
+      loading.className = 'camera-preview-loading';
+      loading.setAttribute('role', 'status');
+      loading.textContent = 'Loading preview…';
+      media.appendChild(loading);
+    }
+    preview.appendChild(media);
+  };
+  previewState = createCameraPreviewState({ animalId, render: renderPreview });
+  previewState.render();
+  const previewController = createCameraPreviewController({
+    requestPreview: (index) => api.previewLocalCamera(index),
+    previewState,
+    setMessage: (text) => { message.textContent = text; },
+  });
+  const showPreview = () => {
+    const index = Number(form.elements.camera_index.value);
+    if (!Number.isInteger(index) || index < 0) {
+      message.textContent = 'Enter a whole camera index of 0 or higher.';
+      return;
+    }
+    return previewController.capture(index);
+  };
+  const openConnect = () => {
+    form.hidden = false;
+    setSourceMode(sourceMode);
+    (sourceMode === 'camera' ? form.elements.camera_index : videoInput).focus();
+  };
   section.querySelector('[data-connect]')?.addEventListener('click', openConnect);
   section.querySelector('[data-change]')?.addEventListener('click', openConnect);
   section.querySelector('[data-cancel-connect]')?.addEventListener('click', () => { form.hidden = true; message.textContent = ''; });
+  sourceOptions.forEach((option) => option.addEventListener('click', () => setSourceMode(option.dataset.sourceMode)));
+  sourcePreviewButtons.forEach((button) => button.addEventListener('click', showPreview));
+  videoInput.addEventListener('change', () => {
+    const selected = videoInput.files && videoInput.files[0];
+    videoFilename.textContent = selected ? selected.name : 'No video selected.';
+  });
+  section.querySelector('[data-profile-photo]').addEventListener('change', async (event) => {
+    const photo = event.currentTarget.files && event.currentTarget.files[0];
+    if (!photo) return;
+    event.currentTarget.disabled = true;
+    message.textContent = 'Saving profile photo…';
+    try {
+      await api.uploadProfilePhoto(animalId, photo);
+      message.textContent = '';
+      await onRefresh();
+    } catch (error) {
+      message.textContent = error.message || 'Unable to save the profile photo.';
+    } finally {
+      event.currentTarget.disabled = false;
+      event.currentTarget.value = '';
+    }
+  });
   section.querySelector('[data-start]')?.addEventListener('click', async (event) => {
     event.currentTarget.disabled = true;
     try { await api.startMonitoring(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to start monitoring.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
@@ -419,15 +545,27 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const index = Number(form.elements.camera_index.value);
-    if (!Number.isInteger(index) || index < 0) { message.textContent = 'Enter a whole camera index of 0 or higher.'; return; }
-    const submit = form.querySelector('[type="submit"]');
-    submit.disabled = true;
-    message.textContent = 'Connecting camera…';
-    try { await api.setMonitoringSource(animalId, { source_type: 'webcam', source_reference: index }); await onRefresh(); }
-    catch (error) { message.textContent = error.message || 'Unable to connect this camera.'; }
-    finally { submit.disabled = false; }
+    sourceSubmit.disabled = true;
+    try {
+      if (sourceMode === 'video') {
+        const video = videoInput.files && videoInput.files[0];
+        if (!video) { message.textContent = 'Choose a video file first.'; return; }
+        message.textContent = 'Uploading video…';
+        await api.uploadMonitoringVideo(animalId, video);
+      } else {
+        const index = Number(form.elements.camera_index.value);
+        if (!Number.isInteger(index) || index < 0) { message.textContent = 'Enter a whole camera index of 0 or higher.'; return; }
+        message.textContent = 'Connecting camera…';
+        await api.setMonitoringSource(animalId, { source_type: 'webcam', source_reference: index });
+      }
+      await onRefresh();
+    } catch (error) {
+      message.textContent = error.message || (sourceMode === 'video' ? 'Unable to upload this video.' : 'Unable to connect this camera.');
+    } finally {
+      sourceSubmit.disabled = false;
+    }
   });
+  setSourceMode(sourceMode);
   return section;
 }
 

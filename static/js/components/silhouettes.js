@@ -13,7 +13,7 @@ export function getAnimalCategory(speciesOrType = '') {
 }
 
 export function profileImageSource(profile = {}) {
-  return profile.profileImage || profile.profile_image || profile.photoUrl || null;
+  return profile.profile_photo_url || profile.profileImage || profile.profile_image || profile.photoUrl || null;
 }
 
 export function renderAnimalVisual(profile, { className = 'animal-visual', alt = '' } = {}) {

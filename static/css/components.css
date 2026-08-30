@@ -95,6 +95,9 @@
 .monitoring-lifecycle-copy h2 { margin: 0; color: var(--color-primary); font-family: Georgia, 'Times New Roman', serif; font-size: 1.24rem; letter-spacing: -.035em; }
 .monitoring-lifecycle-copy p { max-width: 64ch; margin: 4px 0 0; color: var(--color-text-secondary); font-size: .76rem; line-height: 1.45; }
 .monitoring-lifecycle-actions, .connect-camera-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.profile-photo-action { position: relative; overflow: hidden; }
+.profile-photo-action input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.profile-photo-action:focus-within { color: #fff; background: var(--color-primary); border-color: var(--color-primary); outline: 3px solid rgba(15,48,64,.18); outline-offset: 2px; }
 .connect-camera-form { display: grid; grid-template-columns: minmax(0,1fr) minmax(120px,.35fr); gap: 12px 16px; width: 100%; padding-top: 15px; border-top: 1px solid rgba(15,48,64,.14); }
 .connect-camera-form[hidden] { display: none !important; }
 .connect-camera-form strong { color: var(--color-primary); font-size: .8rem; }
@@ -102,9 +105,22 @@
 .connect-camera-form label { display: grid; gap: 6px; align-content: start; color: var(--color-primary); font-size: .71rem; font-weight: 750; }
 .connect-camera-form input { min-height: 38px; box-sizing: border-box; border: 1px solid #d9d0c6; border-radius: 9px; padding: 8px 10px; color: var(--color-text-primary); background: #fffdfa; font: inherit; font-size: .82rem; }
 .connect-camera-form input:focus { border-color: var(--color-primary); outline: 3px solid rgba(15,48,64,.12); outline-offset: 1px; }
+.source-mode-picker { display: inline-flex; align-items: center; justify-self: end; width: max-content; max-width: 100%; padding: 3px; background: #e9ded3; border-radius: 10px; }
+.source-mode-option { min-height: 32px; padding: 7px 10px; color: var(--color-text-secondary); background: transparent; border: 0; border-radius: 7px; font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
+.source-mode-option:hover, .source-mode-option:focus-visible { color: var(--color-primary); outline: 2px solid rgba(15,48,64,.32); outline-offset: -2px; }
+.source-mode-option.is-selected { color: var(--color-primary); background: #fffdfa; box-shadow: 0 1px 3px rgba(15,48,64,.12); }
+.camera-source-fields, .video-source-fields { grid-column: 1 / -1; max-width: 480px; }
+.video-source-fields small { color: var(--color-text-muted); font-size: .7rem; font-weight: 500; overflow-wrap: anywhere; }
 .connect-camera-actions { grid-column: 1 / -1; justify-content: space-between; }
 .connect-camera-message { min-height: 1.3em; color: var(--color-text-secondary); font-size: .74rem; }
-@media (max-width: 780px) { .all-animals-heading-actions { align-items: flex-start; flex-wrap: wrap; } }
+.camera-preview { display: grid; gap: 10px; width: 100%; padding-top: 15px; border-top: 1px solid rgba(15,48,64,.14); }
+.camera-preview[hidden] { display: none !important; }
+.camera-preview-heading { display: grid; gap: 3px; color: var(--color-primary); font-size: .78rem; }
+.camera-preview-heading span { color: var(--color-text-secondary); font-size: .72rem; line-height: 1.45; }
+.camera-preview-media { position: relative; width: min(100%, 430px); overflow: hidden; background: #071d27; border-radius: 10px; }
+.camera-preview img { display: block; width: 100%; max-height: 270px; object-fit: contain; background: #071d27; }
+.camera-preview-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(7,29,39,.74); font-size: .74rem; }
+@media (max-width: 780px) { .all-animals-heading-actions { align-items: flex-start; flex-wrap: wrap; } .source-mode-picker { justify-self: start; } }
 @media (prefers-reduced-motion: reduce) { .add-animal-card, .all-animals-add-action { transition: none; } .add-animal-card:is(:hover, :focus-visible), .all-animals-add-action:is(:hover, :focus-visible) { transform: none; } }
 .overview-empty-state { padding: 44px; border-radius: 16px; color: var(--color-text-secondary); background: #fff; box-shadow: 0 8px 20px rgba(15,48,64,.06); }
 .overview-empty-state h2 { margin: 0; color: var(--color-primary); font-family: Georgia, 'Times New Roman', serif; }

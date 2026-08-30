@@ -43,3 +43,30 @@ test('frontend routes and source presentation contain no hardcoded demo-animal i
   assert.doesNotMatch(dashboard, /\/demo-video\/raku\.mp4/);
   assert.doesNotMatch(overview, /Gendut architectural preview/i);
 });
+
+test('local camera controls describe a snapshot and do not hardcode a camera index', async () => {
+  const dashboard = await readFile(new URL('./dashboard.js', import.meta.url), 'utf8');
+
+  assert.match(dashboard, /Preview camera/);
+  assert.match(dashboard, /Snapshot only/);
+  assert.doesNotMatch(dashboard, /camera_index:\s*1/);
+});
+
+test('owner-facing media controls use file pickers and never disclose storage paths', async () => {
+  const [dashboard, onboarding, silhouettes] = await Promise.all([
+    readFile(new URL('./dashboard.js', import.meta.url), 'utf8'),
+    readFile(new URL('./onboarding.js', import.meta.url), 'utf8'),
+    readFile(new URL('./silhouettes.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(onboarding, /Profile photo <em>Optional<\/em>/);
+  assert.match(onboarding, /accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.match(dashboard, /Live camera/);
+  assert.match(dashboard, /Video file/);
+  assert.match(dashboard, /accept="video\/mp4,video\/webm,video\/quicktime"/);
+  assert.match(dashboard, /uploadMonitoringVideo/);
+  assert.match(silhouettes, /profile\.profile_photo_url/);
+  assert.doesNotMatch(dashboard, /gs:\/\//);
+  assert.doesNotMatch(onboarding, /gs:\/\//);
+  assert.doesNotMatch(dashboard, /demo_videos|Raku\.mp4/i);
+});

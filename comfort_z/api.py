@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 from pathlib import Path
 from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from comfort_z.agent import root_agent
@@ -27,6 +28,13 @@ from comfort_z.services.orchestration import (
     MonitoringProfileNotFoundError,
     MonitoringSourceNotConnectedError,
 )
+from comfort_z.services.video import CameraCaptureError, is_usable_jpeg_bytes
+from comfort_z.services.media import (
+    MAX_PROFILE_PHOTO_BYTES,
+    MAX_VIDEO_UPLOAD_BYTES,
+    MediaStorageError,
+    get_local_media_store,
+)
 from comfort_z.services.voice_updates import (
     MAX_AUDIO_BYTES,
     VoiceUpdateError,
@@ -36,6 +44,7 @@ from comfort_z.services.voice_updates import (
 from comfort_z.services.temperature_units import TemperatureUnitConfirmationRequired
 from comfort_z.tools.monitoring import (
     connect_monitoring_source,
+    capture_local_camera_preview,
     create_monitoring_profile,
     disconnect_monitoring_source,
     generate_daily_report,
@@ -46,6 +55,7 @@ from comfort_z.tools.monitoring import (
     monitor_next_window,
     pause_monitoring,
     record_owner_update,
+    set_profile_photo_reference,
     start_monitoring,
 )
 
@@ -122,6 +132,12 @@ class MonitoringSourceRequest(BaseModel):
         return self
 
 
+class CameraPreviewRequest(BaseModel):
+    """Narrow local-only camera preview input; paths and arbitrary media are not accepted."""
+
+    camera_index: StrictInt = Field(ge=0, le=32)
+
+
 class NextWindowRequest(BaseModel):
     window_max_samples: int = Field(default=2, ge=1, le=10)
 
@@ -157,6 +173,10 @@ def _workflow_http_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail="Animal profile was not found.")
     if isinstance(error, MonitoringSourceNotConnectedError):
         return HTTPException(status_code=409, detail="Monitoring source is not connected.")
+    if isinstance(error, CameraCaptureError):
+        return HTTPException(status_code=503, detail="Camera preview is unavailable. Check the local camera and try again.")
+    if isinstance(error, MediaStorageError):
+        return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, VoiceUpdateError):
         return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, VoiceUpdateUnavailableError):
@@ -168,6 +188,30 @@ def _workflow_http_error(error: Exception) -> HTTPException:
     if isinstance(error, ObservationRepositoryError):
         return HTTPException(status_code=503, detail="Observation storage is unavailable.")
     return HTTPException(status_code=502, detail="Monitoring analysis is temporarily unavailable.")
+
+
+def _profile_payload(profile: MonitoringProfile | dict) -> dict:
+    """Return profile data with a safe photo URL instead of an app filesystem path."""
+    if isinstance(profile, dict):
+        payload = dict(profile)
+    else:
+        payload = profile.model_dump(mode="json")
+    reference = payload.get("profile_photo_reference")
+    if isinstance(reference, str):
+        try:
+            store = get_local_media_store()
+            store.resolve(reference)
+            payload["profile_photo_url"] = store.public_url(reference)
+        except MediaStorageError:
+            payload["profile_photo_url"] = None
+    return payload
+
+
+def _require_existing_profile(animal_id: str) -> MonitoringProfile:
+    profile = get_monitoring_state_repository().get_profile(animal_id)
+    if profile is None:
+        raise MonitoringProfileNotFoundError(f"No monitoring profile exists for animal {animal_id!r}.")
+    return profile
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -201,7 +245,7 @@ async def list_animals() -> list[dict]:
         )
     except Exception as error:
         raise _workflow_http_error(error) from error
-    return [profile.model_dump(mode="json") for profile in profiles]
+    return [_profile_payload(profile) for profile in profiles]
 
 
 @app.get("/health")
@@ -213,6 +257,19 @@ def health() -> dict[str, str]:
         "model": str(root_agent.model),
         "observation_store": os.getenv("OBSERVATION_STORE", "local").lower(),
     }
+
+
+@app.get("/media/{media_kind}/{filename}")
+async def serve_owner_media(media_kind: str, filename: str):
+    """Serve one generated local/demo media object without exposing directories."""
+    try:
+        reference = f"{media_kind}/{filename}"
+        path = get_local_media_store().resolve(reference)
+    except MediaStorageError as error:
+        logger.warning("Requested owner media was unavailable: %s", type(error).__name__)
+        raise HTTPException(status_code=404, detail="Media not available.") from error
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, no-store"})
 
 
 @app.post("/monitor")
@@ -300,7 +357,8 @@ async def recent_owner_updates(
 async def save_monitoring_profile(request: MonitoringProfileRequest) -> dict:
     """Save the owner goal and bounded source configuration; it starts no background loop."""
     try:
-        return await run_in_threadpool(create_monitoring_profile, **request.model_dump())
+        saved = await run_in_threadpool(create_monitoring_profile, **request.model_dump())
+        return _profile_payload(saved)
     except Exception as error:
         raise _workflow_http_error(error) from error
 
@@ -315,19 +373,68 @@ async def get_monitoring_profile(animal_id: str) -> dict:
         raise _workflow_http_error(error) from error
     if profile is None:
         raise HTTPException(status_code=404, detail="Monitoring profile was not found.")
-    return profile.model_dump(mode="json")
+    return _profile_payload(profile)
+
+
+@app.post("/animals/{animal_id}/profile-photo")
+async def upload_profile_photo(animal_id: str, photo: UploadFile = File(...)) -> dict:
+    """Store one bounded decorative image without changing monitoring state."""
+    try:
+        await run_in_threadpool(_require_existing_profile, animal_id)
+        content = await photo.read(MAX_PROFILE_PHOTO_BYTES + 1)
+        stored = get_local_media_store().save_profile_photo(
+            content, content_type=photo.content_type or "", original_name=photo.filename
+        )
+        try:
+            saved = await run_in_threadpool(set_profile_photo_reference, animal_id, stored.reference)
+        except Exception:
+            get_local_media_store().remove(stored.reference)
+            raise
+        return _profile_payload(saved)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    finally:
+        await photo.close()
+
+
+@app.post("/monitoring/{animal_id}/video-source")
+async def upload_monitoring_video(animal_id: str, video: UploadFile = File(...)) -> dict:
+    """Upload one local/demo video and connect it as the profile's single paused source."""
+    try:
+        await run_in_threadpool(_require_existing_profile, animal_id)
+        content = await video.read(MAX_VIDEO_UPLOAD_BYTES + 1)
+        stored = get_local_media_store().save_video(
+            content, content_type=video.content_type or "", original_name=video.filename
+        )
+        try:
+            saved = await run_in_threadpool(
+                connect_monitoring_source,
+                animal_id,
+                stored.reference,
+                MonitoringSourceType.VIDEO.value,
+                stored.display_name,
+            )
+        except Exception:
+            get_local_media_store().remove(stored.reference)
+            raise
+        return _profile_payload(saved)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    finally:
+        await video.close()
 
 
 @app.put("/monitoring/{animal_id}/source")
 async def set_monitoring_source(animal_id: str, request: MonitoringSourceRequest) -> dict:
     """Connect or change one source and leave it paused until the owner starts it."""
     try:
-        return await run_in_threadpool(
+        saved = await run_in_threadpool(
             connect_monitoring_source,
             animal_id,
             request.source_reference,
             request.source_type.value,
         )
+        return _profile_payload(saved)
     except Exception as error:
         raise _workflow_http_error(error) from error
 
@@ -336,15 +443,33 @@ async def set_monitoring_source(animal_id: str, request: MonitoringSourceRequest
 async def remove_monitoring_source(animal_id: str) -> dict:
     """Disconnect a source without deleting the animal profile or its history."""
     try:
-        return await run_in_threadpool(disconnect_monitoring_source, animal_id)
+        saved = await run_in_threadpool(disconnect_monitoring_source, animal_id)
+        return _profile_payload(saved)
     except Exception as error:
         raise _workflow_http_error(error) from error
+
+
+@app.post("/monitoring/camera-preview")
+async def preview_local_camera(request: CameraPreviewRequest) -> Response:
+    """Return one local JPEG snapshot without saving, analyzing, or scheduling anything."""
+    try:
+        jpeg = await run_in_threadpool(capture_local_camera_preview, request.camera_index)
+        if not is_usable_jpeg_bytes(jpeg):
+            raise CameraCaptureError("Camera preview did not produce a valid JPEG.")
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/monitoring/{animal_id}/start")
 async def start_monitoring_profile(animal_id: str) -> dict:
     try:
-        return await run_in_threadpool(start_monitoring, animal_id)
+        saved = await run_in_threadpool(start_monitoring, animal_id)
+        return _profile_payload(saved)
     except Exception as error:
         raise _workflow_http_error(error) from error
 
@@ -352,7 +477,8 @@ async def start_monitoring_profile(animal_id: str) -> dict:
 @app.post("/monitoring/{animal_id}/pause")
 async def pause_monitoring_profile(animal_id: str) -> dict:
     try:
-        return await run_in_threadpool(pause_monitoring, animal_id)
+        saved = await run_in_threadpool(pause_monitoring, animal_id)
+        return _profile_payload(saved)
     except Exception as error:
         raise _workflow_http_error(error) from error
 

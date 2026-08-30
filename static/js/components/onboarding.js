@@ -36,6 +36,11 @@ export function renderAddAnimalOnboarding(navigate) {
             <span>Location label <em>Optional</em></span>
             <input name="locationName" type="text" autocomplete="off" maxlength="160" placeholder="For example, home office">
           </label>
+          <label class="onboarding-field onboarding-photo-field">
+            <span>Profile photo <em>Optional</em></span>
+            <input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp">
+            <small>A portrait only. It is never used as monitoring evidence.</small>
+          </label>
         </div>
       </section>
       <section class="onboarding-section" aria-labelledby="care-goal-heading">
@@ -62,6 +67,7 @@ export function renderAddAnimalOnboarding(navigate) {
   let goalWasEdited = false;
   let generatedAnimalId = null;
   let isSubmitting = false;
+  let profileSaved = false;
 
   const suggestedGoal = () => {
     const name = nameInput.value.trim();
@@ -109,10 +115,20 @@ export function renderAddAnimalOnboarding(navigate) {
     message.textContent = 'Saving animal profile…';
     message.dataset.state = 'pending';
     try {
-      await api.createMonitoringProfile(payload);
+      const savedProfile = profileSaved
+        ? { animal_id: generatedAnimalId }
+        : await api.createMonitoringProfile(payload);
+      profileSaved = true;
+      const photo = form.elements.profilePhoto.files[0];
+      if (photo) {
+        message.textContent = 'Saving profile photo…';
+        await api.uploadProfilePhoto(savedProfile.animal_id || generatedAnimalId, photo);
+      }
       navigate('#/animals');
     } catch (error) {
-      message.textContent = error.message || 'Unable to save this animal profile.';
+      message.textContent = profileSaved
+        ? (error.message || 'Animal profile was saved, but the profile photo could not be uploaded. Choose another photo or open the animal from All Animals.')
+        : (error.message || 'Unable to save this animal profile.');
       message.dataset.state = 'error';
       isSubmitting = false;
       submitButton.disabled = false;

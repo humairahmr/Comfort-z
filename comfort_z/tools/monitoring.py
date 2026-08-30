@@ -132,13 +132,14 @@ def create_monitoring_profile(
 
 
 def connect_monitoring_source(
-    animal_id: str, source_reference: str | int, source_type: str
+    animal_id: str, source_reference: str | int, source_type: str, source_display_name: str | None = None
 ) -> dict:
     """Attach one existing video or local-camera source, initially paused."""
     from comfort_z.services.orchestration import connect_monitoring_source as connect_source
 
     return connect_source(
-        animal_id.strip(), source_reference=source_reference, source_type=source_type
+        animal_id.strip(), source_reference=source_reference, source_type=source_type,
+        source_display_name=source_display_name,
     ).model_dump(mode="json")
 
 
@@ -161,6 +162,20 @@ def pause_monitoring(animal_id: str) -> dict:
     from comfort_z.services.orchestration import pause_monitoring as pause_profile
 
     return pause_profile(animal_id.strip()).model_dump(mode="json")
+
+
+def capture_local_camera_preview(camera_index: int) -> bytes:
+    """Capture one local snapshot without starting a monitoring workflow."""
+    from comfort_z.services.video import VideoMonitoringService
+
+    return VideoMonitoringService().capture_webcam_snapshot(camera_index)
+
+
+def set_profile_photo_reference(animal_id: str, profile_photo_reference: str) -> dict:
+    """Attach one owner-selected profile photo without invoking monitoring."""
+    from comfort_z.services.orchestration import set_profile_photo_reference as set_photo
+
+    return set_photo(animal_id.strip(), profile_photo_reference).model_dump(mode="json")
 
 
 def monitor_next_window(animal_id: str, window_max_samples: int = 2) -> dict:

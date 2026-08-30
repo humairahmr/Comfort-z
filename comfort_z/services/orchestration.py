@@ -78,6 +78,7 @@ def connect_monitoring_source(
     *,
     source_reference: str | int,
     source_type: MonitoringSourceType,
+    source_display_name: str | None = None,
     state_repository: MonitoringStateRepository | None = None,
     now: datetime | None = None,
 ) -> MonitoringProfile:
@@ -98,6 +99,7 @@ def connect_monitoring_source(
     updates: dict[str, object] = {
         "source_reference": source_reference,
         "source_type": source_type,
+        "source_display_name": source_display_name,
         "active": False,
         "updated_at": now or datetime.now(timezone.utc),
     }
@@ -120,6 +122,7 @@ def disconnect_monitoring_source(
             update={
                 "source_reference": None,
                 "source_type": None,
+                "source_display_name": None,
                 "active": False,
                 "source_cursor_seconds": 0.0,
                 "source_cursor_frame_index": None,
@@ -156,6 +159,26 @@ def pause_monitoring(
     profile = _require_profile(state, animal_id)
     return state.save_profile(
         profile.model_copy(update={"active": False, "updated_at": now or datetime.now(timezone.utc)})
+    )
+
+
+def set_profile_photo_reference(
+    animal_id: str,
+    profile_photo_reference: str,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Attach a decorative owner photo without touching monitoring configuration or history."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    return state.save_profile(
+        profile.model_copy(
+            update={
+                "profile_photo_reference": profile_photo_reference,
+                "updated_at": now or datetime.now(timezone.utc),
+            }
+        )
     )
 
 

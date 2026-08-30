@@ -31,8 +31,14 @@ export function monitoringDisplayPriority(profile) {
 
 export function sourceDisplayLabel(profile) {
   if (!hasMonitoringSource(profile)) return 'Monitoring source not connected';
-  if (profile.source_type === 'webcam') return 'Camera connected';
+  if (profile.source_type === 'webcam') return 'Local camera configured';
   return 'Video source connected';
+}
+
+export function sourceSamplingDetail(profile) {
+  if (!hasMonitoringSource(profile)) return 'No monitoring source connected.';
+  if (profile.source_type === 'webcam') return `Camera ${profile.source_reference} · sampled during observation windows`;
+  return `${profile.source_display_name || 'Video source'} · sampled during observation windows`;
 }
 
 export function profileSpeciesLabel(profile) {
