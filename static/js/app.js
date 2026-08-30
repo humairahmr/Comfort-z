@@ -4,7 +4,7 @@
 
 import { api } from './api.js';
 import { state } from './state.js';
-import { renderAllAnimals, renderOverview } from './components/overview.js';
+import { renderAllAnimals, renderMonitoringPage, renderOverview } from './components/overview.js';
 import { renderAddAnimalOnboarding } from './components/onboarding.js';
 import { renderDashboard } from './components/dashboard.js';
 
@@ -50,6 +50,8 @@ function updateNavActive(hash) {
   let activeRoute = 'overview';
   if (hash === '#/animals' || hash === '#/animals/new') {
     activeRoute = 'animals';
+  } else if (hash === '#/monitoring') {
+    activeRoute = 'monitoring';
   } else if (hash.startsWith('#/animals/')) {
     activeRoute = 'monitoring';
   }
@@ -76,6 +78,8 @@ async function handleRoute() {
   try {
     if (hash === '#/animals/new') {
       loadAddAnimalRoute();
+    } else if (hash === '#/monitoring') {
+      await loadMonitoringRoute();
     } else if (hash.startsWith('#/animals/')) {
       const rawId = hash.replace('#/animals/', '').split('#')[0].trim();
       const animalId = decodeURIComponent(rawId);
@@ -117,10 +121,25 @@ async function loadAllAnimalsRoute() {
   }
 }
 
+async function loadMonitoringRoute() {
+  try {
+    const animals = await api.getAnimals();
+    state.animals = animals;
+    appRoot.innerHTML = '';
+    appRoot.appendChild(renderMonitoringPage(animals, navigate));
+  } catch (err) {
+    renderError('Unable to load monitoring profiles', err.message);
+  }
+}
+
 async function loadDashboardRoute(animalId) {
   try {
-    const [profile, observations, reports, ownerUpdates] = await Promise.all([
-      api.getProfile(animalId).catch(() => null),
+    const profile = await api.getProfile(animalId);
+    if (!profile) {
+      renderAnimalNotFound(animalId);
+      return;
+    }
+    const [observations, reports, ownerUpdates] = await Promise.all([
       api.getObservations(animalId, 10).catch(() => []),
       api.getReports(animalId, 5).catch(() => []),
       api.getOwnerUpdates(animalId, 20).catch(() => []),
@@ -159,6 +178,16 @@ async function loadDashboardRoute(animalId) {
   }
 }
 
+function renderAnimalNotFound(animalId) {
+  appRoot.innerHTML = `
+    <div class="state-box">
+      <h3>Animal profile not found</h3>
+      <p>No saved monitoring profile exists for ${escapeHtml(animalId)}.</p>
+      <div style="margin-top: var(--space-4);"><button class="btn btn-secondary" onclick="window.location.hash='#/animals'">View All Animals</button></div>
+    </div>
+  `;
+}
+
 function renderError(title, detail) {
   appRoot.innerHTML = `
     <div class="state-box" style="border-color: var(--color-terracotta); background-color: var(--color-terracotta-light);">
@@ -170,6 +199,15 @@ function renderError(title, detail) {
       </div>
     </div>
   `;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 // Global Brand Click

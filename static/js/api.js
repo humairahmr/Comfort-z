@@ -11,10 +11,11 @@ export class ApiClient {
   async fetchJson(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
     try {
+      const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
       const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
-          'Content-Type': 'application/json',
+          ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
           ...options.headers,
         },
         ...options,
@@ -81,14 +82,7 @@ export class ApiClient {
    */
   async getObservations(animalId, limit = 10) {
     if (!animalId) return [];
-    let result = await this.fetchJson(`/animals/${encodeURIComponent(animalId)}/observations?limit=${limit}`);
-    if ((!result || result.length === 0) && animalId.toLowerCase() === 'raku') {
-      const altId = animalId === 'raku' ? 'Raku' : 'raku';
-      const altResult = await this.fetchJson(`/animals/${encodeURIComponent(altId)}/observations?limit=${limit}`);
-      if (altResult && altResult.length > 0) {
-        result = altResult;
-      }
-    }
+    const result = await this.fetchJson(`/animals/${encodeURIComponent(animalId)}/observations?limit=${limit}`);
     return Array.isArray(result) ? result : [];
   }
 
@@ -129,6 +123,23 @@ export class ApiClient {
   }
 
   /**
+   * Turn one temporary voice recording into review-only drafts. This never saves care updates.
+   */
+  async createVoiceUpdateDrafts(animalId, recording, metadata) {
+    if (!animalId) throw new Error('Animal ID is required to add a voice update.');
+    const form = new FormData();
+    form.append('audio', recording, 'owner-update.webm');
+    form.append('capture_timestamp', metadata.captureTimestamp);
+    form.append('capture_duration_ms', String(metadata.captureDurationMs));
+    if (metadata.browserTimezone) form.append('browser_timezone', metadata.browserTimezone);
+    if (metadata.locale) form.append('locale', metadata.locale);
+    return this.fetchJson(`/animals/${encodeURIComponent(animalId)}/owner-update-drafts/voice`, {
+      method: 'POST',
+      body: form,
+    });
+  }
+
+  /**
    * Trigger a single bounded observation cycle for an animal.
    */
   async runNextWindow(animalId, windowMaxSamples = 1) {
@@ -147,6 +158,29 @@ export class ApiClient {
     return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/daily-report`, {
       method: 'POST',
     });
+  }
+
+  async setMonitoringSource(animalId, source) {
+    if (!animalId) throw new Error('Animal ID is required to connect a source.');
+    return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/source`, {
+      method: 'PUT',
+      body: JSON.stringify(source),
+    });
+  }
+
+  async disconnectMonitoringSource(animalId) {
+    if (!animalId) throw new Error('Animal ID is required to disconnect a source.');
+    return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/source`, { method: 'DELETE' });
+  }
+
+  async startMonitoring(animalId) {
+    if (!animalId) throw new Error('Animal ID is required to start monitoring.');
+    return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/start`, { method: 'POST' });
+  }
+
+  async pauseMonitoring(animalId) {
+    if (!animalId) throw new Error('Animal ID is required to pause monitoring.');
+    return this.fetchJson(`/monitoring/${encodeURIComponent(animalId)}/pause`, { method: 'POST' });
   }
 }
 

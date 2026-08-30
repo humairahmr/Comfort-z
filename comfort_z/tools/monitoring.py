@@ -131,6 +131,38 @@ def create_monitoring_profile(
     return create_or_update_monitoring_profile(profile).model_dump(mode="json")
 
 
+def connect_monitoring_source(
+    animal_id: str, source_reference: str | int, source_type: str
+) -> dict:
+    """Attach one existing video or local-camera source, initially paused."""
+    from comfort_z.services.orchestration import connect_monitoring_source as connect_source
+
+    return connect_source(
+        animal_id.strip(), source_reference=source_reference, source_type=source_type
+    ).model_dump(mode="json")
+
+
+def disconnect_monitoring_source(animal_id: str) -> dict:
+    """Detach the configured source while preserving monitoring history."""
+    from comfort_z.services.orchestration import disconnect_monitoring_source as disconnect_source
+
+    return disconnect_source(animal_id.strip()).model_dump(mode="json")
+
+
+def start_monitoring(animal_id: str) -> dict:
+    """Enable future bounded monitoring windows for a configured source."""
+    from comfort_z.services.orchestration import start_monitoring as start_profile
+
+    return start_profile(animal_id.strip()).model_dump(mode="json")
+
+
+def pause_monitoring(animal_id: str) -> dict:
+    """Pause future bounded monitoring windows without disconnecting the source."""
+    from comfort_z.services.orchestration import pause_monitoring as pause_profile
+
+    return pause_profile(animal_id.strip()).model_dump(mode="json")
+
+
 def monitor_next_window(animal_id: str, window_max_samples: int = 2) -> dict:
     """Run only the next bounded source window for a saved monitoring profile."""
     from comfort_z.services.orchestration import monitor_next_window as run_next_window

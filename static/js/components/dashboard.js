@@ -12,6 +12,28 @@ import {
   formatConfidence,
 } from '../state.js';
 import { renderAnimalVisual } from './silhouettes.js';
+import { createVoiceUpdatePanel } from './voice-update.js';
+import {
+  formatDirectReadingValue,
+  formatOwnerMeasurementAge,
+  formatOwnerReportedTimestamp,
+  formatReadingType,
+  selectEnvironmentPanelReading,
+  shouldSuppressMissingReadingRequest,
+} from './environment-readings.mjs';
+import {
+  formatOwnerUpdateSummary,
+  selectCompactOwnerUpdates,
+  sortOwnerUpdates,
+} from './owner-updates.mjs';
+import {
+  hasMonitoringSource,
+  lifecycleActions,
+  monitoringLifecycleState,
+  monitoringStatusText,
+  profileSpeciesLabel,
+  sourceDisplayLabel,
+} from './monitoring-state.mjs';
 
 export function renderDashboard(
   animalId,
@@ -47,6 +69,8 @@ export function renderDashboard(
   // 2. Editorial Animal Profile Hero (The Identity Anchor)
   container.appendChild(createAnimalHero(animalId, profile, latestObs));
 
+  container.appendChild(createMonitoringLifecycleControls(animalId, profile, onRefresh));
+
   // Owner-provided context is intentionally separate from visual observations.
   container.appendChild(createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh));
 
@@ -58,7 +82,7 @@ export function renderDashboard(
   consoleLayout.appendChild(createObservationStage(animalId, profile, latestObs, onRefresh));
 
   // Section 2: Full-Width Dual-Context Environmental Reasoning Ribbon (No Boxy Cards)
-  consoleLayout.appendChild(createTelemetryRibbon(profile, latestObs));
+  consoleLayout.appendChild(createTelemetryRibbon(profile, latestObs, ownerUpdates));
 
   // Section 3: Longitudinal Intelligence & Archives (Open, Asymmetric Architecture)
   const intelLayout = document.createElement('div');
@@ -93,15 +117,22 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
   section.setAttribute('aria-label', 'Owner-provided care updates');
 
   const updates = Array.isArray(ownerUpdates) ? ownerUpdates : [];
+  const compactUpdates = selectCompactOwnerUpdates(updates);
+  const chronologicalUpdates = sortOwnerUpdates(updates);
+  const hasAdditionalHistory = chronologicalUpdates.length > compactUpdates.length;
   section.innerHTML = `
     <div class="owner-updates-header">
       <div>
         <h2>Care updates</h2>
         <p>Owner-provided information, kept separate from visual observations.</p>
       </div>
-      <button type="button" class="btn btn-secondary owner-update-toggle" aria-expanded="false">
-        Add update
-      </button>
+      <div class="owner-update-entry-actions">
+        <button type="button" class="btn btn-secondary owner-update-toggle" aria-expanded="false">Add update</button>
+        <button type="button" class="btn btn-secondary owner-update-voice-trigger">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"></path></svg>
+          Voice update
+        </button>
+      </div>
     </div>
     <form class="owner-update-form" hidden novalidate>
       <div class="owner-update-fields">
@@ -150,10 +181,18 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
       </div>
     </form>
     <div class="owner-update-list">
-      ${updates.length === 0
+      ${compactUpdates.length === 0
         ? '<p class="empty-inline">No care updates recorded yet.</p>'
-        : updates.slice(0, 5).map(renderOwnerUpdate).join('')}
+        : compactUpdates.map(renderOwnerUpdate).join('')}
     </div>
+    ${hasAdditionalHistory ? `
+      <div class="owner-update-history" hidden>
+        <div class="owner-update-history-list">${chronologicalUpdates.map(renderOwnerUpdate).join('')}</div>
+      </div>
+      <button type="button" class="owner-update-history-toggle btn btn-secondary" aria-expanded="false">
+        View update history (${chronologicalUpdates.length} loaded)
+      </button>
+    ` : ''}
   `;
 
   const toggle = section.querySelector('.owner-update-toggle');
@@ -165,6 +204,9 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
   const submit = form.querySelector('[type="submit"]');
   const cancel = section.querySelector('.owner-update-cancel');
   const refresh = section.querySelector('.owner-update-refresh');
+  const voiceTrigger = section.querySelector('.owner-update-voice-trigger');
+  const history = section.querySelector('.owner-update-history');
+  const historyToggle = section.querySelector('.owner-update-history-toggle');
 
   const updateFieldVisibility = () => {
     const measurement = category.value === 'measurement';
@@ -196,10 +238,22 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
     if (open) form.elements.category.focus();
   };
 
-  toggle.addEventListener('click', () => setFormOpen(form.hidden, { reset: !form.hidden }));
+  toggle.addEventListener('click', () => {
+    voicePanel.close();
+    setFormOpen(form.hidden, { reset: !form.hidden });
+  });
   cancel.addEventListener('click', () => setFormOpen(false, { reset: true }));
   category.addEventListener('change', updateFieldVisibility);
   updateFieldVisibility();
+
+  if (history && historyToggle) {
+    historyToggle.addEventListener('click', () => {
+      const opening = history.hidden;
+      history.hidden = !opening;
+      historyToggle.setAttribute('aria-expanded', String(opening));
+      historyToggle.textContent = opening ? 'Hide history' : `View update history (${chronologicalUpdates.length} loaded)`;
+    });
+  }
 
   const refreshSavedUpdate = async (savedOwnerUpdateId = null) => {
     if (typeof onOwnerUpdatesRefresh !== 'function') {
@@ -284,41 +338,97 @@ function createOwnerUpdatesModule(animalId, ownerUpdates, onOwnerUpdatesRefresh)
     }
   });
 
+  const voicePanel = createVoiceUpdatePanel(animalId, onOwnerUpdatesRefresh);
+  section.appendChild(voicePanel.element);
+  voiceTrigger.addEventListener('click', () => {
+    setFormOpen(false, { reset: true });
+    voicePanel.open();
+  });
+
   return section;
 }
 
 function renderOwnerUpdate(update) {
-  const reading = update.reading;
-  const detail = reading
-    ? `${escapeHtml(reading.reading_type)}: ${escapeHtml(String(reading.value))} ${escapeHtml(reading.unit)}`
-    : escapeHtml(update.note || 'Owner-provided update.');
+  const summary = formatOwnerUpdateSummary(update);
   return `
     <article class="owner-update-item">
       <div>
-        <strong>${escapeHtml(ownerUpdateLabel(update.category))}</strong>
-        <p>${detail}</p>
+        <strong>${escapeHtml(summary.label)}</strong>
+        <p>${escapeHtml(summary.detail)}</p>
       </div>
-      <time datetime="${escapeHtml(update.occurred_at || '')}">${escapeHtml(formatTimestamp(update.occurred_at))}</time>
+      <time datetime="${escapeHtml(update.occurred_at || '')}">Owner reported ${escapeHtml(formatOwnerReportedTimestamp(update.occurred_at))}</time>
     </article>
   `;
-}
-
-function ownerUpdateLabel(category) {
-  const labels = {
-    measurement: 'Direct reading',
-    feeding: 'Feeding',
-    care: 'Care',
-    appetite: 'Appetite',
-    behavior: 'Behaviour note',
-    availability: 'Availability',
-    note: 'Owner note',
-  };
-  return labels[category] || 'Owner update';
 }
 
 function localDateTimeValue(date = new Date()) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
+  const section = document.createElement('section');
+  section.className = 'monitoring-lifecycle-controls';
+  const lifecycle = monitoringLifecycleState(profile);
+  const actions = lifecycleActions(profile);
+  const cameraIndex = profile && profile.source_type === 'webcam' ? profile.source_reference : 0;
+  section.innerHTML = `
+    <div class="monitoring-lifecycle-copy">
+      <h2>${monitoringStatusText(profile)}</h2>
+      <p>${lifecycle === 'source_not_connected'
+        ? 'Connect a camera before Comfort-z can collect visual observations.'
+        : `${escapeHtml(sourceDisplayLabel(profile))}. ${lifecycle === 'active' ? 'Bounded observation windows are enabled.' : 'Start monitoring when you are ready to collect observations.'}`}</p>
+    </div>
+    <div class="monitoring-lifecycle-actions">
+      ${actions.includes('connect') ? '<button type="button" class="btn btn-primary" data-connect>Connect source</button>' : ''}
+      ${actions.includes('start') ? '<button type="button" class="btn btn-primary" data-start>Start monitoring</button>' : ''}
+      ${actions.includes('pause') ? '<button type="button" class="btn btn-secondary" data-pause>Pause monitoring</button>' : ''}
+      ${actions.includes('change') ? '<button type="button" class="btn btn-secondary" data-change>Change source</button>' : ''}
+      ${actions.includes('disconnect') ? '<button type="button" class="btn btn-secondary" data-disconnect>Disconnect</button>' : ''}
+    </div>
+    <form class="connect-camera-form" hidden novalidate>
+      <div>
+        <strong>Connect a local camera</strong>
+        <p>Use a camera available to the computer running Comfort-z. Local cameras are not available to Cloud Run.</p>
+      </div>
+      <label>Camera index <input name="camera_index" type="number" min="0" step="1" required value="${escapeHtml(cameraIndex)}"></label>
+      <div class="connect-camera-actions">
+        <span class="connect-camera-message" role="status" aria-live="polite"></span>
+        <button type="button" class="btn btn-secondary" data-cancel-connect>Cancel</button>
+        <button type="submit" class="btn btn-primary">Connect camera</button>
+      </div>
+    </form>
+  `;
+  const form = section.querySelector('.connect-camera-form');
+  const message = section.querySelector('.connect-camera-message');
+  const openConnect = () => { form.hidden = false; form.elements.camera_index.focus(); };
+  section.querySelector('[data-connect]')?.addEventListener('click', openConnect);
+  section.querySelector('[data-change]')?.addEventListener('click', openConnect);
+  section.querySelector('[data-cancel-connect]')?.addEventListener('click', () => { form.hidden = true; message.textContent = ''; });
+  section.querySelector('[data-start]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try { await api.startMonitoring(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to start monitoring.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+  });
+  section.querySelector('[data-pause]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try { await api.pauseMonitoring(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to pause monitoring.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+  });
+  section.querySelector('[data-disconnect]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try { await api.disconnectMonitoringSource(animalId); await onRefresh(); } catch (error) { message.textContent = error.message || 'Unable to disconnect the source.'; form.hidden = false; } finally { event.currentTarget.disabled = false; }
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const index = Number(form.elements.camera_index.value);
+    if (!Number.isInteger(index) || index < 0) { message.textContent = 'Enter a whole camera index of 0 or higher.'; return; }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    message.textContent = 'Connecting camera…';
+    try { await api.setMonitoringSource(animalId, { source_type: 'webcam', source_reference: index }); await onRefresh(); }
+    catch (error) { message.textContent = error.message || 'Unable to connect this camera.'; }
+    finally { submit.disabled = false; }
+  });
+  return section;
 }
 
 /**
@@ -330,9 +440,9 @@ function createAnimalHero(animalId, profile, latestObs) {
   hero.setAttribute('aria-label', 'Animal Identity Profile');
 
   const name = (profile && profile.animal_name) || (latestObs && latestObs.animal_name) || animalId;
-  const species = (profile && profile.expected_species) || (latestObs && latestObs.expected_species) || 'Species not specified';
+  const species = profile ? profileSpeciesLabel(profile) : ((latestObs && latestObs.expected_species) || 'Species not recorded');
   const goal = (profile && profile.monitoring_goal) || 'Continuous welfare monitoring for ' + name;
-  const active = profile ? profile.active !== false : true;
+  const active = profile ? profile.active === true : false;
   const mode = profile ? profile.current_sampling_mode || 'normal' : 'normal';
   const used = profile ? profile.samples_used_in_current_period || 0 : (latestObs ? 1 : 0);
   const budget = profile ? profile.daily_sample_budget || 24 : 24;
@@ -340,12 +450,7 @@ function createAnimalHero(animalId, profile, latestObs) {
   const hasSource = hasMonitoringSource(profile);
 
   // Format source type clearly
-  let sourceLabel = hasSource ? 'Prerecorded Video Feed' : 'Monitoring source not connected';
-  if (hasSource && profile.source_type === 'webcam') {
-    sourceLabel = 'Live Camera Feed';
-  } else if (hasSource && String(profile.source_reference).startsWith('gs://')) {
-    sourceLabel = 'Cloud Video Feed';
-  }
+  const sourceLabel = sourceDisplayLabel(profile);
 
   // Future profile image support: if provided, render image; else render decorative silhouette
   const hasUploadedPhoto = Boolean(profile && profile.profileImage);
@@ -372,7 +477,7 @@ function createAnimalHero(animalId, profile, latestObs) {
       <div class="hero-status-row">
         <span class="badge ${hasSource && active ? 'badge-normal' : 'badge-neutral'}">
           <span class="badge-dot"></span>
-          ${!hasSource ? 'Monitoring Source Not Connected' : active ? 'Continuous Monitoring Active' : 'Profile Inactive'}
+          ${!hasSource ? 'Monitoring source not connected' : active ? 'Monitoring active' : 'Monitoring paused'}
         </span>
         <span style="font-size: var(--font-size-label); color: var(--color-text-muted);">
           ID: ${escapeHtml(animalId)}
@@ -420,16 +525,9 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   stage.setAttribute('aria-label', 'Visual Monitoring and Observation Stage');
 
   const hasSource = hasMonitoringSource(profile);
-  const sourceInfo = hasSource
-    ? (profile.source_reference || (latestObs && latestObs.source_info) || 'Visual feed not specified')
-    : 'Monitoring source not connected';
+  const monitoringActive = profile && profile.active === true;
   
-  let sourceBadge = hasSource ? 'Prerecorded Video Feed' : 'Source not connected';
-  if (hasSource && profile.source_type === 'webcam') {
-    sourceBadge = 'Live Camera Feed';
-  } else if (hasSource && String(sourceInfo).startsWith('gs://')) {
-    sourceBadge = 'Cloud Video Feed';
-  }
+  const sourceBadge = sourceDisplayLabel(profile);
 
   const gemini = latestObs ? (latestObs.gemini_observation || {}) : {};
   const isVisible = gemini.animal_visible !== false;
@@ -472,10 +570,14 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   } else {
     mediaPane.innerHTML = `
       <div class="stage-video-frame">
-        <video class="stage-video-player" controls muted preload="metadata" playsinline>
-          <source src="/demo-video/raku.mp4" type="video/mp4">
-          Your browser does not support video playback.
-        </video>
+        <div class="stage-placeholder">
+          <h3>${profile.source_type === 'webcam' ? 'Camera connected' : 'Video source connected'}</h3>
+          <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
+            ${profile.source_type === 'webcam'
+              ? 'Comfort-z samples this camera on the computer that has access to it. Live playback is not shown here.'
+              : 'Comfort-z samples this configured video source through OpenCV. Playback is not shown here.'}
+          </p>
+        </div>
         <div class="stage-source-badge">
           <span class="badge-dot" style="background-color: var(--color-peach);"></span>
           <span>${escapeHtml(sourceBadge)}</span>
@@ -483,18 +585,6 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
       </div>
     `;
 
-    const videoEl = mediaPane.querySelector('video');
-    videoEl.addEventListener('error', () => {
-      const frame = mediaPane.querySelector('.stage-video-frame');
-      frame.innerHTML = `
-        <div class="stage-placeholder">
-          <h3>Visual Feed Connected</h3>
-          <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
-            Cloud Storage source active. Bounded frame extraction and multimodal inference operate on stored media.
-          </p>
-        </div>
-      `;
-    });
   }
   viewportSplit.appendChild(mediaPane);
 
@@ -509,7 +599,7 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
         <span class="badge ${hasSource ? 'badge-stage-monitor' : 'badge-neutral'}">${hasSource ? 'Awaiting observation' : 'Source not connected'}</span>
       </div>
       <p style="color: var(--color-stage-text-subtle); font-size: var(--font-size-body); line-height: 1.5;">
-        ${hasSource ? 'No visual observation records saved yet. Click "Run observation now" below to sample the current frame.' : 'No observation can be collected until a monitoring source is connected.'}
+        ${hasSource ? (monitoringActive ? 'No visual observation records saved yet. Run one bounded observation when you are ready.' : 'Monitoring is paused. Start monitoring before collecting an observation.') : 'No observation can be collected until a monitoring source is connected.'}
       </p>
     `;
   } else {
@@ -562,19 +652,17 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
   // Bottom Action Bar of Stage
   const bottomBar = document.createElement('div');
   bottomBar.className = 'stage-bottom-bar';
-  bottomBar.innerHTML = hasSource ? `
+  bottomBar.innerHTML = hasSource && monitoringActive ? `
     <div style="display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;">
       <button id="btn-run-observation" class="btn btn-stage-primary">
         Run observation now
       </button>
       <div id="stage-action-status" style="display: none;" role="status" aria-live="polite"></div>
     </div>
-    <div style="font-size: var(--font-size-label); color: var(--color-stage-text-muted); font-family: var(--font-mono);">
-      <span>${escapeHtml(sourceInfo)}</span>
-    </div>
+    <span style="font-size: var(--font-size-label); color: var(--color-stage-text-muted);">One bounded frame window</span>
   ` : `
     <span style="font-size: var(--font-size-label); color: var(--color-stage-text-muted);">
-      Monitoring actions are unavailable until a source is connected.
+      ${hasSource ? 'Start monitoring before running an observation.' : 'Connect a source before monitoring is available.'}
     </span>
   `;
   stage.appendChild(bottomBar);
@@ -634,11 +722,17 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
 /**
  * 2. Full-Width Dual-Context Environmental Reasoning Ribbon (No Boxy Cards)
  */
-function createTelemetryRibbon(profile, latestObs) {
+function createTelemetryRibbon(profile, latestObs, ownerUpdates) {
   const ribbon = document.createElement('section');
   ribbon.className = 'telemetry-ribbon';
   ribbon.setAttribute('aria-label', 'Environmental Telemetry Context');
+  const formatTimestamp = formatOwnerReportedTimestamp;
 
+  const enclosureReading = selectEnvironmentPanelReading({
+    ownerUpdates,
+    latestObservation: latestObs,
+    profile,
+  });
   const readings = (latestObs && latestObs.direct_environment_readings) ||
                    (profile && profile.direct_environment_readings) || [];
 
@@ -674,7 +768,24 @@ function createTelemetryRibbon(profile, latestObs) {
   halfEnclosure.className = 'telemetry-strip-half';
 
   let enclosureValueHtml = '';
-  if (readings.length > 0) {
+  if (enclosureReading?.source === 'owner_update') {
+    enclosureValueHtml = `
+      <div style="display: flex; align-items: baseline; gap: var(--space-3);">
+        <span class="ribbon-value-lead">${escapeHtml(formatDirectReadingValue(enclosureReading.reading))}</span>
+        <span class="ribbon-sub-metric">${escapeHtml(formatReadingType(enclosureReading.reading.reading_type))}</span>
+      </div>
+      <p class="ribbon-provenance-caption" style="margin: var(--space-2) 0 0;">
+        Owner reported ${escapeHtml(formatTimestamp(enclosureReading.ownerUpdate.occurred_at))}${enclosureReading.isFresh ? '' : ' • May be outdated'}
+      </p>
+    `;
+  } else if (enclosureReading) {
+    enclosureValueHtml = `
+      <div style="display: flex; align-items: baseline; gap: var(--space-3);">
+        <span class="ribbon-value-lead">${escapeHtml(formatDirectReadingValue(enclosureReading.reading))}</span>
+        <span class="ribbon-sub-metric">${escapeHtml(formatReadingType(enclosureReading.reading.reading_type))}</span>
+      </div>
+    `;
+  } else if (readings.length > 0) {
     enclosureValueHtml = `
       <div style="display: flex; align-items: baseline; gap: var(--space-3);">
         <span class="ribbon-value-lead">${readings[0].value}°${escapeHtml(readings[0].unit || 'C')}</span>
@@ -690,7 +801,10 @@ function createTelemetryRibbon(profile, latestObs) {
     `;
   }
 
-  const missingReq = (latestObs && latestObs.missing_direct_reading_requests && latestObs.missing_direct_reading_requests[0]) || '';
+  const storedMissingReq = (latestObs && latestObs.missing_direct_reading_requests && latestObs.missing_direct_reading_requests[0]) || '';
+  const missingReq = shouldSuppressMissingReadingRequest(storedMissingReq, enclosureReading)
+    ? ''
+    : storedMissingReq;
 
   halfEnclosure.innerHTML = `
     <div class="ribbon-header" style="color: var(--color-secondary);">
@@ -699,11 +813,14 @@ function createTelemetryRibbon(profile, latestObs) {
     </div>
     ${enclosureValueHtml}
     <div class="ribbon-reasoning-flow">
-      ${missingReq ? `<strong>Sensor Advisory:</strong> ${escapeHtml(missingReq)}` : `<strong>Enclosure Assessment:</strong> No owner-provided enclosure reading is available.`}
+      ${enclosureReading?.source === 'owner_update'
+        ? `<strong>Owner context:</strong> Manually reported enclosure measurement. Last updated ${escapeHtml(formatOwnerMeasurementAge(enclosureReading.ownerUpdate))}.${missingReq ? ` ${escapeHtml(missingReq)}` : ''}`
+        : missingReq
+          ? `<strong>Sensor Advisory:</strong> ${escapeHtml(missingReq)}`
+          : enclosureReading
+            ? `<strong>Owner context:</strong> Manually reported enclosure measurement.`
+          : `<strong>Enclosure Assessment:</strong> No owner-provided enclosure reading is available.`}
     </div>
-    <p class="ribbon-provenance-caption">
-      Owner-provided measurement from inside the animal's enclosure; not sensor-derived telemetry.
-    </p>
   `;
   ribbon.appendChild(halfEnclosure);
 
@@ -1069,8 +1186,4 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-function hasMonitoringSource(profile) {
-  return Boolean(profile && profile.source_type && profile.source_reference !== null && profile.source_reference !== undefined);
 }

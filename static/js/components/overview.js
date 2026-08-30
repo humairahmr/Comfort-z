@@ -2,6 +2,14 @@
 
 import { formatTimestamp } from '../state.js';
 import { renderAnimalVisual } from './silhouettes.js';
+import {
+  hasMonitoringSource,
+  monitoringDisplayPriority,
+  monitoringStatusClass,
+  monitoringStatusText,
+  profileSpeciesLabel,
+  sourceDisplayLabel,
+} from './monitoring-state.mjs';
 
 export function renderOverview(animals, navigate) {
   const container = document.createElement('div');
@@ -54,22 +62,60 @@ export function renderAllAnimals(animals, navigate) {
     </div>
   `;
   container.appendChild(heading);
-  container.appendChild(createAnimalsSection(orderedAnimals, navigate, { includePrototypeCards: false }));
+  container.appendChild(createAnimalsSection(orderedAnimals, navigate, { includeAddAnimal: false }));
   return container;
 }
 
-function createAnimalsSection(animals, navigate, { includePrototypeCards = true } = {}) {
+export function renderMonitoringPage(animals, navigate) {
+  const container = document.createElement('div');
+  container.className = 'overview-container monitoring-container';
+  const orderedAnimals = orderAnimalsForDisplay(animals);
+  const heading = document.createElement('header');
+  heading.className = 'overview-heading';
+  heading.innerHTML = `
+    <div>
+      <h1>Monitoring</h1>
+      <p>Source status and bounded monitoring controls for configured animals.</p>
+    </div>
+    <span class="overview-live-state"><span></span> ${orderedAnimals.length} ${orderedAnimals.length === 1 ? 'profile' : 'profiles'} configured</span>
+  `;
+  container.appendChild(heading);
+  const list = document.createElement('section');
+  list.className = 'monitoring-profile-list';
+  if (!orderedAnimals.length) {
+    list.innerHTML = '<p class="empty-inline">No animal profiles are configured yet.</p>';
+  } else {
+    orderedAnimals.forEach((profile) => {
+      const name = profile.animal_name || profile.animal_id;
+      const item = document.createElement('article');
+      item.className = 'monitoring-profile-row';
+      item.innerHTML = `
+        <div>
+          <span class="animal-card-status"><span class="status-orb ${monitoringStatusClass(profile)}"></span>${monitoringStatusText(profile)}</span>
+          <h2>${escapeHtml(name)}</h2>
+          <p>${escapeHtml(sourceDisplayLabel(profile))} · ${escapeHtml(profileSpeciesLabel(profile))}</p>
+        </div>
+        <button type="button" class="btn btn-secondary">Open monitoring</button>
+      `;
+      item.querySelector('button').addEventListener('click', () => navigate(`#/animals/${encodeURIComponent(profile.animal_id)}`));
+      list.appendChild(item);
+    });
+  }
+  container.appendChild(list);
+  return container;
+}
+
+function createAnimalsSection(animals, navigate, { includeAddAnimal = true } = {}) {
   const section = document.createElement('section');
   section.className = 'animals-section';
-  if (!includePrototypeCards && animals.length === 1) {
+  if (!includeAddAnimal && animals.length === 1) {
     section.classList.add('animals-section--single-profile');
   }
   section.innerHTML = '<div class="animals-section-heading"><h2>My Animals</h2><p>Only configured profiles are shown here.</p></div>';
   const grid = document.createElement('div');
   grid.className = 'animal-card-grid';
   animals.forEach((animal) => grid.appendChild(createAnimalCard(animal, navigate)));
-  if (includePrototypeCards) {
-    grid.appendChild(createPreviewCard());
+  if (includeAddAnimal) {
     grid.appendChild(createAddAnimalCard(navigate));
   }
   section.appendChild(grid);
@@ -78,7 +124,7 @@ function createAnimalsSection(animals, navigate, { includePrototypeCards = true 
 
 function createHero(profile, navigate) {
   const name = profile.animal_name || profile.animal_id;
-  const species = profile.expected_species || 'Species not recorded';
+  const species = profileSpeciesLabel(profile);
   const remaining = Math.max(0, (profile.daily_sample_budget || 0) - (profile.samples_used_in_current_period || 0));
   const hero = document.createElement('article');
   hero.className = 'animal-hero';
@@ -90,7 +136,7 @@ function createHero(profile, navigate) {
       <span class="visual-disclaimer">Decorative profile fallback</span>
     </div>
     <div class="animal-hero-copy">
-      <div class="animal-hero-status"><span class="status-orb ${profileStatusClass(profile)}"></span>${profileStatusText(profile)}</div>
+      <div class="animal-hero-status"><span class="status-orb ${monitoringStatusClass(profile)}"></span>${monitoringStatusText(profile)}</div>
       <h2>${escapeHtml(name)}</h2>
       <p class="animal-hero-species">${escapeHtml(species)}</p>
       <p class="animal-hero-goal">${escapeHtml(profile.monitoring_goal || 'Monitoring goal not recorded.')}</p>
@@ -126,9 +172,9 @@ function createAnimalCard(profile, navigate) {
   card.innerHTML = `
     <div class="animal-card-visual">${renderAnimalVisual(profile, { className: 'animal-card-silhouette', alt: `Profile of ${name}` })}</div>
     <div class="animal-card-content">
-      <span class="animal-card-status"><span class="status-orb ${profileStatusClass(profile)}"></span>${profileStatusText(profile)}</span>
+      <span class="animal-card-status"><span class="status-orb ${monitoringStatusClass(profile)}"></span>${monitoringStatusText(profile)}</span>
       <h3>${escapeHtml(name)}</h3>
-      <p>${escapeHtml(profile.expected_species || 'Species not recorded')}</p>
+      <p>${escapeHtml(profileSpeciesLabel(profile))}</p>
       <div class="animal-card-footer">
         <small>${profile.last_monitoring_run ? `Latest: ${escapeHtml(formatTimestamp(profile.last_monitoring_run))}` : 'No monitoring run recorded'}</small>
         <span class="animal-card-arrow" aria-hidden="true">→</span>
@@ -143,22 +189,6 @@ function createAnimalCard(profile, navigate) {
       open();
     }
   });
-  return card;
-}
-
-function createPreviewCard() {
-  const card = document.createElement('article');
-  card.className = 'animal-card animal-card-preview';
-  card.setAttribute('aria-label', 'Gendut architectural preview profile');
-  card.innerHTML = `
-    <div class="animal-card-visual">${renderAnimalVisual({ expected_species: 'Domestic cat' }, { className: 'animal-card-silhouette', alt: '' })}</div>
-    <div class="animal-card-content">
-      <span class="animal-card-status preview-status">Preview profile</span>
-      <h3>Gendut</h3>
-      <p>Domestic cat</p>
-      <small>Architectural preview only — not actively monitored.</small>
-    </div>
-  `;
   return card;
 }
 
@@ -186,15 +216,7 @@ function createAddAnimalCard(navigate) {
 }
 
 function sourceLabel(profile) {
-  if (!hasMonitoringSource(profile)) return 'Not connected';
-  if (profile.source_type === 'webcam') return 'Live webcam';
-  if (String(profile.source_reference || '').startsWith('gs://')) return 'Cloud video';
-  if (profile.source_type === 'video') return 'Local video';
-  return 'Source not recorded';
-}
-
-function hasMonitoringSource(profile) {
-  return Boolean(profile && profile.source_type && profile.source_reference !== null && profile.source_reference !== undefined);
+  return sourceDisplayLabel(profile);
 }
 
 function orderAnimalsForDisplay(animals) {
@@ -206,22 +228,11 @@ function orderAnimalsForDisplay(animals) {
 }
 
 function animalDisplayPriority(profile) {
-  if (hasMonitoringSource(profile) && profile.active !== false) return 0;
-  if (!hasMonitoringSource(profile)) return 1;
-  return 2;
+  return monitoringDisplayPriority(profile);
 }
 
 function animalDisplayName(profile) {
   return String(profile && (profile.animal_name || profile.animal_id) || '');
-}
-
-function profileStatusText(profile) {
-  if (!hasMonitoringSource(profile)) return 'Monitoring source not connected';
-  return profile.active === false ? 'Monitoring inactive' : 'Monitoring active';
-}
-
-function profileStatusClass(profile) {
-  return !hasMonitoringSource(profile) || profile.active === false ? 'is-idle' : '';
 }
 
 function escapeHtml(value) {

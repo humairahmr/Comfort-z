@@ -13,6 +13,7 @@ from comfort_z.models import (
     DailyReportNarrative,
     DirectEnvironmentReading,
     MonitoringProfile,
+    MonitoringSourceType,
     MonitoringWindowResult,
     ObservationStatus,
     OwnerUpdate,
@@ -28,6 +29,7 @@ from comfort_z.services.repository import (
     get_repository,
 )
 from comfort_z.services.source import ResolvedVideoSource, resolve_video_source
+from comfort_z.services.temperature_units import normalize_owner_temperature_reading
 from comfort_z.services.video import VideoMonitoringService
 
 DEFAULT_WINDOW_MAX_SAMPLES = 2
@@ -71,6 +73,101 @@ def create_or_update_monitoring_profile(
     return repository.save_profile(saved)
 
 
+def connect_monitoring_source(
+    animal_id: str,
+    *,
+    source_reference: str | int,
+    source_type: MonitoringSourceType,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Attach or replace the single source for a saved profile without running it."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    source_type = MonitoringSourceType(source_type)
+    if isinstance(source_reference, str) and not source_reference.strip():
+        raise ValueError("source_reference cannot be empty.")
+    if source_type == MonitoringSourceType.WEBCAM and (
+        not isinstance(source_reference, int) or isinstance(source_reference, bool)
+    ):
+        raise ValueError("webcam source_reference must be an integer camera index.")
+    changed = (
+        profile.source_reference != source_reference
+        or profile.source_type != source_type
+    )
+    updates: dict[str, object] = {
+        "source_reference": source_reference,
+        "source_type": source_type,
+        "active": False,
+        "updated_at": now or datetime.now(timezone.utc),
+    }
+    if changed:
+        updates.update({"source_cursor_seconds": 0.0, "source_cursor_frame_index": None})
+    return state.save_profile(profile.model_copy(update=updates))
+
+
+def disconnect_monitoring_source(
+    animal_id: str,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Detach a source while retaining the animal, history, and care context."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    return state.save_profile(
+        profile.model_copy(
+            update={
+                "source_reference": None,
+                "source_type": None,
+                "active": False,
+                "source_cursor_seconds": 0.0,
+                "source_cursor_frame_index": None,
+                "updated_at": now or datetime.now(timezone.utc),
+            }
+        )
+    )
+
+
+def start_monitoring(
+    animal_id: str,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Mark a configured source active; scheduling remains an external concern."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    if not profile.has_monitoring_source:
+        raise MonitoringSourceNotConnectedError("Monitoring source is not connected.")
+    return state.save_profile(
+        profile.model_copy(update={"active": True, "updated_at": now or datetime.now(timezone.utc)})
+    )
+
+
+def pause_monitoring(
+    animal_id: str,
+    *,
+    state_repository: MonitoringStateRepository | None = None,
+    now: datetime | None = None,
+) -> MonitoringProfile:
+    """Pause a configured source without disconnecting it or changing its history."""
+    state = state_repository or get_monitoring_state_repository()
+    profile = _require_profile(state, animal_id)
+    return state.save_profile(
+        profile.model_copy(update={"active": False, "updated_at": now or datetime.now(timezone.utc)})
+    )
+
+
+def _require_profile(state: MonitoringStateRepository, animal_id: str) -> MonitoringProfile:
+    profile = state.get_profile(animal_id.strip())
+    if profile is None:
+        raise MonitoringProfileNotFoundError(
+            f"No monitoring profile exists for animal {animal_id!r}."
+        )
+    return profile
+
+
 def record_owner_update(
     update: OwnerUpdate,
     *,
@@ -78,9 +175,14 @@ def record_owner_update(
 ) -> OwnerUpdate:
     """Persist one owner update without touching monitoring profile state or running AI."""
     state = state_repository or get_monitoring_state_repository()
-    if state.get_profile(update.animal_id) is None:
+    profile = state.get_profile(update.animal_id)
+    if profile is None:
         raise MonitoringProfileNotFoundError(
             f"No monitoring profile exists for animal {update.animal_id!r}."
+        )
+    if update.reading is not None:
+        update = update.model_copy(
+            update={"reading": normalize_owner_temperature_reading(update.reading, profile)}
         )
     return state.save_owner_update(update)
 

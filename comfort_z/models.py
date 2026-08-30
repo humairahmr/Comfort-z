@@ -148,6 +148,49 @@ class OwnerUpdate(BaseModel):
         return self
 
 
+class VoiceOwnerUpdateDraft(BaseModel):
+    """A review-only voice interpretation; it is not persisted until confirmed."""
+
+    category: OwnerUpdateCategory
+    occurred_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=500)
+    reading: DirectEnvironmentReading | None = None
+    review_warning: str | None = Field(default=None, max_length=300)
+    unit_confirmation_required: bool = False
+
+    @model_validator(mode="after")
+    def validate_draft_shape(self) -> "VoiceOwnerUpdateDraft":
+        note = self.note.strip() if self.note else None
+        if self.occurred_at is not None:
+            if self.occurred_at.tzinfo is None:
+                raise ValueError("voice draft timestamps must include a timezone.")
+            self.occurred_at = self.occurred_at.astimezone(timezone.utc)
+        if self.category == OwnerUpdateCategory.MEASUREMENT:
+            if self.reading is None:
+                raise ValueError("measurement drafts require a direct reading.")
+            self.note = note
+            return self
+        if self.reading is not None:
+            raise ValueError("only measurement drafts may include a direct reading.")
+        if not note:
+            raise ValueError("non-measurement drafts require a non-empty note.")
+        self.note = note
+        return self
+
+
+class VoiceOwnerUpdateDraftBatch(BaseModel):
+    """Bounded structured output from voice transcript normalization."""
+
+    drafts: list[VoiceOwnerUpdateDraft] = Field(default_factory=list, max_length=5)
+    review_warnings: list[str] = Field(default_factory=list, max_length=5)
+
+
+class VoiceOwnerUpdateDraftResponse(VoiceOwnerUpdateDraftBatch):
+    """Transient API response; transcript and drafts are never persisted here."""
+
+    transcript: str = Field(min_length=1, max_length=2000)
+
+
 class EnvironmentContext(BaseModel):
     """Outdoor/local conditions that may support, but never replace, enclosure data."""
 
@@ -283,6 +326,15 @@ class MonitoringProfile(BaseModel):
             raise ValueError(
                 "source_reference and source_type must be provided together or both omitted."
             )
+        if self.source_type == MonitoringSourceType.WEBCAM and (
+            not isinstance(self.source_reference, int) or isinstance(self.source_reference, bool)
+        ):
+            raise ValueError("webcam source_reference must be an integer camera index.")
+        # A profile can be saved before its monitoring source is connected.  Old
+        # persisted source-less records may still contain active=true; normalize
+        # them safely when read instead of making those records invalid.
+        if not has_reference:
+            self.active = False
         return self
 
     @property

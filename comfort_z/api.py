@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
@@ -20,21 +20,33 @@ from comfort_z.models import (
     MonitoringProfile,
     MonitoringSourceType,
     OwnerUpdateCategory,
+    VoiceOwnerUpdateDraftResponse,
 )
 from comfort_z.services.repository import ObservationRepositoryError, get_monitoring_state_repository
 from comfort_z.services.orchestration import (
     MonitoringProfileNotFoundError,
     MonitoringSourceNotConnectedError,
 )
+from comfort_z.services.voice_updates import (
+    MAX_AUDIO_BYTES,
+    VoiceUpdateError,
+    VoiceUpdateUnavailableError,
+    create_voice_owner_update_drafts,
+)
+from comfort_z.services.temperature_units import TemperatureUnitConfirmationRequired
 from comfort_z.tools.monitoring import (
+    connect_monitoring_source,
     create_monitoring_profile,
+    disconnect_monitoring_source,
     generate_daily_report,
     get_recent_daily_reports,
     get_recent_observations,
     get_recent_owner_updates,
     monitor_animal,
     monitor_next_window,
+    pause_monitoring,
     record_owner_update,
+    start_monitoring,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +98,27 @@ class MonitoringProfileRequest(BaseModel):
             raise ValueError(
                 "source_reference and source_type must be provided together or both omitted."
             )
+        if self.source_type == MonitoringSourceType.WEBCAM and (
+            not isinstance(self.source_reference, int) or isinstance(self.source_reference, bool)
+        ):
+            raise ValueError("webcam source_reference must be an integer camera index.")
+        return self
+
+
+class MonitoringSourceRequest(BaseModel):
+    """A deliberate source connection; it never changes the animal's other settings."""
+
+    source_reference: str | int
+    source_type: MonitoringSourceType
+
+    @model_validator(mode="after")
+    def validate_webcam_reference(self) -> "MonitoringSourceRequest":
+        if self.source_type == MonitoringSourceType.WEBCAM and (
+            not isinstance(self.source_reference, int) or isinstance(self.source_reference, bool)
+        ):
+            raise ValueError("webcam source_reference must be an integer camera index.")
+        if isinstance(self.source_reference, str) and not self.source_reference.strip():
+            raise ValueError("source_reference cannot be empty.")
         return self
 
 
@@ -94,13 +127,13 @@ class NextWindowRequest(BaseModel):
 
 
 class OwnerUpdateRequest(BaseModel):
-    """Typed owner context only; voice can use the same domain model later."""
+    """Confirmed typed or voice owner context; draft creation never persists it."""
 
     category: OwnerUpdateCategory
     occurred_at: datetime | None = None
     note: str | None = Field(default=None, max_length=500)
     reading: DirectEnvironmentReading | None = None
-    input_method: Literal["typed"] = "typed"
+    input_method: Literal["typed", "voice"] = "typed"
 
     @model_validator(mode="after")
     def validate_update_shape(self) -> "OwnerUpdateRequest":
@@ -124,6 +157,12 @@ def _workflow_http_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail="Animal profile was not found.")
     if isinstance(error, MonitoringSourceNotConnectedError):
         return HTTPException(status_code=409, detail="Monitoring source is not connected.")
+    if isinstance(error, VoiceUpdateError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, VoiceUpdateUnavailableError):
+        return HTTPException(status_code=503, detail="Voice updates are temporarily unavailable. You can add an update manually.")
+    if isinstance(error, TemperatureUnitConfirmationRequired):
+        return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, (ValueError, FileNotFoundError)):
         return HTTPException(status_code=400, detail="Invalid monitoring input.")
     if isinstance(error, ObservationRepositoryError):
@@ -214,6 +253,37 @@ async def create_owner_update(animal_id: str, request: OwnerUpdateRequest) -> di
         raise _workflow_http_error(error) from error
 
 
+@app.post(
+    "/animals/{animal_id}/owner-update-drafts/voice",
+    response_model=VoiceOwnerUpdateDraftResponse,
+)
+async def create_voice_owner_update_draft_batch(
+    animal_id: str,
+    audio: UploadFile = File(...),
+    capture_timestamp: datetime = Form(...),
+    capture_duration_ms: int = Form(...),
+    browser_timezone: str | None = Form(default=None),
+    locale: str | None = Form(default=None),
+) -> VoiceOwnerUpdateDraftResponse:
+    """Transcribe and normalize one short recording without persisting care updates."""
+    try:
+        audio_bytes = await audio.read(MAX_AUDIO_BYTES + 1)
+        return await run_in_threadpool(
+            create_voice_owner_update_drafts,
+            animal_id,
+            audio_bytes=audio_bytes,
+            mime_type=audio.content_type or "",
+            capture_timestamp=capture_timestamp,
+            capture_duration_ms=capture_duration_ms,
+            browser_timezone=browser_timezone,
+            locale=locale,
+        )
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    finally:
+        await audio.close()
+
+
 @app.get("/animals/{animal_id}/owner-updates")
 async def recent_owner_updates(
     animal_id: str,
@@ -246,6 +316,45 @@ async def get_monitoring_profile(animal_id: str) -> dict:
     if profile is None:
         raise HTTPException(status_code=404, detail="Monitoring profile was not found.")
     return profile.model_dump(mode="json")
+
+
+@app.put("/monitoring/{animal_id}/source")
+async def set_monitoring_source(animal_id: str, request: MonitoringSourceRequest) -> dict:
+    """Connect or change one source and leave it paused until the owner starts it."""
+    try:
+        return await run_in_threadpool(
+            connect_monitoring_source,
+            animal_id,
+            request.source_reference,
+            request.source_type.value,
+        )
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+
+
+@app.delete("/monitoring/{animal_id}/source")
+async def remove_monitoring_source(animal_id: str) -> dict:
+    """Disconnect a source without deleting the animal profile or its history."""
+    try:
+        return await run_in_threadpool(disconnect_monitoring_source, animal_id)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+
+
+@app.post("/monitoring/{animal_id}/start")
+async def start_monitoring_profile(animal_id: str) -> dict:
+    try:
+        return await run_in_threadpool(start_monitoring, animal_id)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+
+
+@app.post("/monitoring/{animal_id}/pause")
+async def pause_monitoring_profile(animal_id: str) -> dict:
+    try:
+        return await run_in_threadpool(pause_monitoring, animal_id)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
 
 
 @app.post("/monitoring/{animal_id}/next-window")

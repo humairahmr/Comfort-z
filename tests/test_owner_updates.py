@@ -27,6 +27,7 @@ from comfort_z.services.repository import (
     LocalJsonMonitoringStateRepository,
 )
 from comfort_z.services.comparison import decide_monitoring
+from comfort_z.services.temperature_units import TemperatureUnitConfirmationRequired
 
 
 NOW = datetime(2026, 8, 30, 12, tzinfo=timezone.utc)
@@ -75,6 +76,40 @@ def test_owner_update_validation_keeps_measurements_separate_from_notes():
         update(reading=DirectEnvironmentReading(reading_type="water temperature", value=27, unit="C"))
     with pytest.raises(ValidationError):
         update(note="   ")
+
+
+def test_typed_temperature_uses_profile_regional_default_without_changing_explicit_units(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    repository.save_profile(profile(location_name="Kuching", timezone="Asia/Kuching"))
+    inferred = update(
+        category=OwnerUpdateCategory.MEASUREMENT,
+        note=None,
+        reading=DirectEnvironmentReading(reading_type="water temperature", value=27, unit="degrees"),
+    )
+    explicit_fahrenheit = update(
+        category=OwnerUpdateCategory.MEASUREMENT,
+        note=None,
+        reading=DirectEnvironmentReading(reading_type="water temperature", value=80, unit="Fahrenheit"),
+    )
+
+    saved_inferred = record_owner_update(inferred, state_repository=repository)
+    saved_fahrenheit = record_owner_update(explicit_fahrenheit, state_repository=repository)
+
+    assert saved_inferred.reading.unit == "C"
+    assert saved_fahrenheit.reading.unit == "F"
+
+
+def test_typed_ambiguous_temperature_requires_an_explicit_unit_without_regional_context(tmp_path):
+    repository = LocalJsonMonitoringStateRepository(tmp_path / "monitoring_state.json")
+    repository.save_profile(profile(location_name=None, timezone="UTC"))
+    ambiguous = update(
+        category=OwnerUpdateCategory.MEASUREMENT,
+        note=None,
+        reading=DirectEnvironmentReading(reading_type="water temperature", value=27, unit="degrees"),
+    )
+
+    with pytest.raises(TemperatureUnitConfirmationRequired):
+        record_owner_update(ambiguous, state_repository=repository)
 
 
 def test_local_owner_updates_are_backward_compatible_and_bounded(tmp_path):

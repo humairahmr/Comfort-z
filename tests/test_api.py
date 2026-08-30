@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from comfort_z import api
+from comfort_z.models import VoiceOwnerUpdateDraftResponse
 
 
 def test_health_reports_agent_model_and_configured_store(monkeypatch):
@@ -99,6 +100,80 @@ def test_owner_update_endpoints_are_separate_from_monitoring_tools(monkeypatch):
     assert received["input_method"] == "typed"
     assert listed.status_code == 200
     assert listed.json() == [{"animal_id": "milo", "limit": 7, "source": "owner"}]
+
+
+def test_confirmed_owner_update_accepts_voice_input_method(monkeypatch):
+    received = {}
+
+    def save_owner_update(animal_id, category, occurred_at, note, reading, input_method):
+        received["input_method"] = input_method
+        return {"owner_update_id": "voice-1", "animal_id": animal_id}
+
+    monkeypatch.setattr(api, "record_owner_update", save_owner_update)
+    response = TestClient(api.app).post(
+        "/animals/raku/owner-updates",
+        json={"category": "feeding", "note": "Fed Raku.", "input_method": "voice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["owner_update_id"] == "voice-1"
+    assert received["input_method"] == "voice"
+
+
+def test_voice_draft_endpoint_is_transient_and_delegates_only_to_voice_service(monkeypatch):
+    received = {}
+
+    def create_drafts(animal_id, **kwargs):
+        received["animal_id"] = animal_id
+        received.update(kwargs)
+        return VoiceOwnerUpdateDraftResponse.model_validate({
+            "transcript": "Fed Raku.",
+            "drafts": [{"category": "feeding", "occurred_at": "2026-08-30T12:00:00Z", "note": "Fed Raku."}],
+            "review_warnings": [],
+        })
+
+    monkeypatch.setattr(api, "create_voice_owner_update_drafts", create_drafts)
+    monkeypatch.setattr(api, "record_owner_update", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not persist")))
+    monkeypatch.setattr(api, "monitor_next_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not monitor")))
+    monkeypatch.setattr(api, "generate_daily_report", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not report")))
+
+    response = TestClient(api.app).post(
+        "/animals/raku/owner-update-drafts/voice",
+        files={"audio": ("update.webm", b"audio", "audio/webm")},
+        data={
+            "capture_timestamp": "2026-08-30T12:00:00Z",
+            "capture_duration_ms": "1200",
+            "browser_timezone": "Asia/Kuala_Lumpur",
+            "locale": "en-MY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["transcript"] == "Fed Raku."
+    assert received["animal_id"] == "raku"
+    assert received["mime_type"] == "audio/webm"
+    assert received["audio_bytes"] == b"audio"
+
+
+def test_voice_draft_endpoint_returns_a_safe_fallback_for_unavailable_voice_service(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise api.VoiceUpdateUnavailableError("internal details must not reach the browser")
+
+    monkeypatch.setattr(api, "create_voice_owner_update_drafts", unavailable)
+
+    response = TestClient(api.app).post(
+        "/animals/raku/owner-update-drafts/voice",
+        files={"audio": ("update.webm", b"audio", "audio/webm")},
+        data={
+            "capture_timestamp": "2026-08-30T12:00:00Z",
+            "capture_duration_ms": "1200",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Voice updates are temporarily unavailable. You can add an update manually."
+    }
 
 
 def test_owner_update_endpoint_rejects_malformed_combinations():

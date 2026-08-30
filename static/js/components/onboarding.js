@@ -26,6 +26,7 @@ export function renderAddAnimalOnboarding(navigate) {
           <label class="onboarding-field">
             <span>Species <em>Optional</em></span>
             <input name="species" type="text" autocomplete="off" maxlength="160" placeholder="For example, Betta splendens">
+            <small>If you know it. Comfort-z can help identify it later.</small>
           </label>
           <label class="onboarding-field">
             <span>Enclosure or environment <em>Optional</em></span>

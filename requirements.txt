@@ -6,4 +6,5 @@ fastapi>=0.133.0
 opencv-python>=4.10.0
 pydantic>=2.7.0
 python-dotenv>=1.0.0
+python-multipart>=0.0.20
 uvicorn>=0.34.0
