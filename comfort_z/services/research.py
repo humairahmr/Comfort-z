@@ -52,7 +52,7 @@ class GoogleSearchResearchProvider:
     """Text-only Gemini Google Search grounding provider for conditional research."""
 
     def __init__(self, *, model: str | None = None, api_key: str | None = None, client=None) -> None:
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        self.model = model or os.getenv("RESEARCH_MODEL") or "gemini-2.5-flash"
         # Google API key is the documented Cloud Run secret; preserve GEMINI_API_KEY
         # as the project-wide fallback for local development.
         self.api_key = api_key if api_key is not None else (

@@ -40,7 +40,8 @@ class FakeClient:
         self.models = CapturingModels(response=response, error=error)
 
 
-def test_google_search_provider_uses_grounding_tool_and_parses_cited_sources():
+def test_google_search_provider_uses_grounding_tool_and_parses_cited_sources(monkeypatch):
+    monkeypatch.delenv("RESEARCH_MODEL", raising=False)
     support = SimpleNamespace(
         grounding_chunk_indices=[0],
         segment=SimpleNamespace(text="Professional guidance recommends documenting persistent changes."),
@@ -58,12 +59,37 @@ def test_google_search_provider_uses_grounding_tool_and_parses_cited_sources():
 
     assert len(client.models.calls) == 1
     call = client.models.calls[0]
-    assert call["model"] == "gemini-3.5-flash"
+    assert call["model"] == "gemini-2.5-flash"
     assert call["config"].tools[0].google_search is not None
     assert "A precise animal-care question" in call["contents"]
     assert sources[0].title == "Veterinary school guidance"
     assert sources[0].evidence.startswith("Professional guidance")
     assert sources[0].category == ResearchSourceCategory.AUTHORITATIVE
+
+
+def test_google_search_provider_uses_research_model_environment_override(monkeypatch):
+    monkeypatch.setenv("RESEARCH_MODEL", "gemini-2.5-flash-preview")
+
+    provider = GoogleSearchResearchProvider(api_key="test-key")
+
+    assert provider.model == "gemini-2.5-flash-preview"
+
+
+def test_google_search_provider_explicit_model_overrides_research_model_environment(monkeypatch):
+    monkeypatch.setenv("RESEARCH_MODEL", "gemini-2.5-flash-preview")
+
+    provider = GoogleSearchResearchProvider(model="gemini-2.5-flash", api_key="test-key")
+
+    assert provider.model == "gemini-2.5-flash"
+
+
+def test_google_search_provider_does_not_use_primary_gemini_model(monkeypatch):
+    monkeypatch.delenv("RESEARCH_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
+
+    provider = GoogleSearchResearchProvider(api_key="test-key")
+
+    assert provider.model == "gemini-2.5-flash"
 
 
 def test_google_search_provider_limits_persisted_sources_to_requested_bound():
