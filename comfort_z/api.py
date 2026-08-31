@@ -9,8 +9,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictInt, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -45,6 +45,14 @@ from comfort_z.services.voice_updates import (
     VoiceUpdateError,
     VoiceUpdateUnavailableError,
     create_voice_owner_update_drafts,
+)
+from comfort_z.services.video_preview import (
+    InvalidVideoRangeError,
+    VideoByteRange,
+    VideoPreviewError,
+    VideoPreviewSourceUnsupportedError,
+    parse_video_range,
+    resolve_video_preview_asset,
 )
 from comfort_z.services.temperature_units import TemperatureUnitConfirmationRequired
 from comfort_z.tools.monitoring import (
@@ -319,6 +327,69 @@ async def serve_owner_media(media_kind: str, filename: str):
         raise HTTPException(status_code=404, detail="Media not available.") from error
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/animals/{animal_id}/monitoring-source-preview")
+async def monitoring_source_preview(
+    animal_id: str,
+    range_header: str | None = Header(default=None, alias="Range"),
+) -> Response:
+    """Stream only the configured video source, without monitoring or persistence side effects."""
+    try:
+        profile = await run_in_threadpool(_require_existing_profile, animal_id)
+    except Exception as error:
+        raise _workflow_http_error(error) from error
+    if profile.source_reference is None or profile.source_type is None:
+        raise HTTPException(status_code=409, detail="Monitoring source is not connected.")
+    if profile.source_type != MonitoringSourceType.VIDEO:
+        raise HTTPException(status_code=409, detail="Configured monitoring source is not a video.")
+
+    try:
+        asset = await run_in_threadpool(
+            resolve_video_preview_asset, profile.source_reference
+        )
+    except VideoPreviewSourceUnsupportedError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Configured video preview is unavailable.",
+        ) from error
+    except VideoPreviewError as error:
+        logger.warning("Configured video preview failed: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Configured video preview is temporarily unavailable.",
+        ) from error
+
+    try:
+        requested_range = parse_video_range(range_header, asset.size)
+    except InvalidVideoRangeError:
+        return Response(
+            status_code=416,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes */{asset.size}",
+                "Cache-Control": "private, no-store",
+            },
+        )
+
+    selected_range = requested_range or VideoByteRange(start=0, end=asset.size - 1)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(selected_range.length),
+        "Cache-Control": "private, no-store",
+    }
+    status_code = 200
+    if requested_range is not None:
+        status_code = 206
+        headers["Content-Range"] = (
+            f"bytes {selected_range.start}-{selected_range.end}/{asset.size}"
+        )
+    return StreamingResponse(
+        asset.iter_bytes(selected_range),
+        status_code=status_code,
+        media_type=asset.content_type,
+        headers=headers,
+    )
 
 
 @app.post("/monitor")

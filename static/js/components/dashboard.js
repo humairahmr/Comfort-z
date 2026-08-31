@@ -39,6 +39,11 @@ import {
   sourceDisplayLabel,
   sourceSamplingDetail,
 } from './monitoring-state.mjs';
+import {
+  initializeMonitoringVideoPreview,
+  monitoringSourcePreviewUrl,
+  supportsMonitoringVideoPreview,
+} from './monitoring-source-preview.mjs';
 
 export function renderDashboard(
   animalId,
@@ -786,15 +791,45 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
         </div>
       </div>
     `;
+  } else if (supportsMonitoringVideoPreview(profile)) {
+    mediaPane.innerHTML = `
+      <div class="stage-video-frame">
+        <video
+          class="stage-video-player"
+          controls
+          muted
+          playsinline
+          preload="metadata"
+          aria-label="Configured monitoring source preview"
+          data-monitoring-source-preview
+        ></video>
+        <div class="stage-preview-context" data-preview-context>
+          <strong>Monitoring source preview</strong>
+          <span>Playback is for reference. Comfort-z samples the source independently.</span>
+        </div>
+        <div class="stage-placeholder" data-preview-fallback hidden>
+          <h3>Video source connected</h3>
+          <p>Comfort-z samples this configured video source through OpenCV. Playback is unavailable here.</p>
+        </div>
+        <div class="stage-source-badge">
+          <span class="badge-dot" style="background-color: var(--color-peach);"></span>
+          <span>${escapeHtml(sourceBadge)}</span>
+        </div>
+      </div>
+    `;
+    initializeMonitoringVideoPreview({
+      video: mediaPane.querySelector('[data-monitoring-source-preview]'),
+      fallback: mediaPane.querySelector('[data-preview-fallback]'),
+      context: mediaPane.querySelector('[data-preview-context]'),
+      url: monitoringSourcePreviewUrl(animalId),
+    });
   } else {
     mediaPane.innerHTML = `
       <div class="stage-video-frame">
         <div class="stage-placeholder">
-          <h3>${profile.source_type === 'webcam' ? 'Camera connected' : 'Video source connected'}</h3>
+          <h3>Camera connected</h3>
           <p style="font-size: var(--font-size-body); max-width: 340px; margin: 0 auto; line-height: 1.5;">
-            ${profile.source_type === 'webcam'
-              ? 'Comfort-z samples this camera on the computer that has access to it. Live playback is not shown here.'
-              : 'Comfort-z samples this configured video source through OpenCV. Playback is not shown here.'}
+            Comfort-z samples this camera on the computer that has access to it. Live playback is not shown here.
           </p>
         </div>
         <div class="stage-source-badge">
