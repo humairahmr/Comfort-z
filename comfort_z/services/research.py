@@ -6,6 +6,7 @@ conditional decision rules request it, and tests use small fakes rather than the
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 from typing import Protocol
 from urllib.parse import urlparse
@@ -30,6 +31,8 @@ from comfort_z.services.comparison import is_valid_animal_observation
 MAX_RESEARCH_SOURCES = 5
 RESEARCH_COOLDOWN = timedelta(hours=24)
 MAX_GROUNDED_RESPONSE_CHARS = 500
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -76,13 +79,21 @@ class GoogleSearchResearchProvider:
                 ),
             )
         except Exception as error:
-            raise _safe_provider_error(error) from error
+            safe_error = _safe_provider_error(error)
+            logger.warning(
+                "Google Search research failed: exception_class=%s message=%s",
+                type(error).__name__,
+                str(safe_error),
+            )
+            raise safe_error from error
 
         answer = _compact_text(_read(response, "text"))
         if not answer:
+            logger.warning("Google Search research failed: stage=empty_response_text")
             raise ResearchProviderError("Google Search research returned no usable grounded response.")
         sources = _grounding_sources(response, answer, max_sources=max(1, min(max_sources, MAX_RESEARCH_SOURCES)))
         if not sources:
+            logger.warning("Google Search research failed: stage=no_grounding_citations")
             raise ResearchProviderError("Google Search research returned no usable citations.")
         return sources
 

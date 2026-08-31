@@ -96,6 +96,53 @@ def test_google_search_provider_rejects_missing_or_malformed_citations_safely():
         provider.search("question", max_sources=5)
 
 
+def test_google_search_provider_logs_only_safe_generate_content_failure(caplog):
+    secret = "AIza-secret-value"
+    raw_url = "https://provider.test/failure?token=private-token"
+    raw_prompt = "owner said a private thing"
+    error = RuntimeError(f"503 UNAVAILABLE {secret} {raw_url} {raw_prompt}")
+    provider = GoogleSearchResearchProvider(api_key="test-key", client=FakeClient(error=error))
+
+    with caplog.at_level("WARNING", logger="comfort_z.services.research"):
+        with pytest.raises(ResearchProviderError, match="temporarily unavailable"):
+            provider.search("question", max_sources=5)
+
+    assert "exception_class=RuntimeError" in caplog.text
+    assert "message=Google Search research is temporarily unavailable." in caplog.text
+    assert secret not in caplog.text
+    assert raw_url not in caplog.text
+    assert raw_prompt not in caplog.text
+
+
+def test_google_search_provider_logs_empty_response_stage_without_response_content(caplog):
+    provider = GoogleSearchResearchProvider(
+        api_key="test-key",
+        client=FakeClient(response=grounded_response(text="  ")),
+    )
+
+    with caplog.at_level("WARNING", logger="comfort_z.services.research"):
+        with pytest.raises(ResearchProviderError, match="grounded response"):
+            provider.search("question", max_sources=5)
+
+    assert "stage=empty_response_text" in caplog.text
+    assert "question" not in caplog.text
+
+
+def test_google_search_provider_logs_missing_citations_stage_without_response_content(caplog):
+    sensitive_answer = "Private owner context that must not reach logs."
+    provider = GoogleSearchResearchProvider(
+        api_key="test-key",
+        client=FakeClient(response=grounded_response(text=sensitive_answer)),
+    )
+
+    with caplog.at_level("WARNING", logger="comfort_z.services.research"):
+        with pytest.raises(ResearchProviderError, match="citations"):
+            provider.search("question", max_sources=5)
+
+    assert "stage=no_grounding_citations" in caplog.text
+    assert sensitive_answer not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
