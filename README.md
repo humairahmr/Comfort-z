@@ -1,51 +1,51 @@
 # Comfort-z
 
-Comfort-z is an agentic animal-monitoring MVP for Google's **All Things Agentic Hackathon**. It turns a visual observation into a structured, non-diagnostic record, remembers it, compares it with the animal's history, then decides whether to continue monitoring or create an alert.
+Comfort-z is a persistent, non-diagnostic agentic animal-monitoring system built for Google's **All Things Agentic Hackathon**. An owner creates a monitoring goal and profile; Comfort-z performs bounded visual observations, interprets selected frames with Gemini, stores structured evidence, compares meaningful history, applies an explainable alert policy, and can continue monitoring or produce a daily report.
 
-> Comfort-z is not veterinary care. It only describes visible behaviour and recommends professional veterinary advice when a pattern is potentially concerning.
+It does not diagnose disease or replace veterinary care. Its role is to describe observed behaviour and context, surface patterns worth attention, and recommend professional advice where appropriate.
 
 ## Agentic workflow
 
-The `comfort_z` Google ADK agent owns one goal: **monitor this animal over time**. Its `monitor_animal` tool uses Gemini to interpret an image, saves the result, retrieves the same animal's recent history, compares the records, applies an explainable policy, and returns supporting evidence.
-
 ```mermaid
 flowchart LR
-  U[Owner visual input] --> A[comfort_z ADK agent]
-  A --> G[Gemini multimodal analysis]
-  G --> S[Structured observation]
-  S --> R[Observation repository]
-  R --> H[Animal history]
-  H --> C[Comparison + alert policy]
-  C --> D[Monitor or alert]
-  D --> U
-  R -. local JSON / Cloud Firestore .-> F[Firestore]
+  O[Owner / Web UI] --> P[Monitoring profile and goal]
+  P --> CR[Cloud Run: Comfort-z + Google ADK]
+  CS[Cloud Scheduler] -->|bounded next-window / daily report| CR
+  CR --> MO[Monitoring orchestrator]
+  VS[Configured video or image source] --> MO
+  GCS[Private Cloud Storage video] --> VS
+  MO --> CV[OpenCV selected-frame sampling]
+  CV --> G35[Gemini 3.5 Flash\nprimary multimodal reasoning]
+  ENV[Optional outdoor and owner context] --> G35
+  G35 --> SO[Structured observation]
+  SO --> FS[Firestore persistent memory]
+  FS --> CT[Comparison, trend, and alert policy]
+  CT --> DASH[Dashboard and daily report]
+  CT -. concerning pattern only .-> R[Gemini 2.5 Flash +\nGoogle Search grounding]
+  R --> FS
 ```
 
-This is deliberately not `prompt → Gemini → answer`: the tool operates on persistent history and independently decides to record, monitor, or alert. It reports the evidence behind each decision.
+Video playback in the dashboard is reference playback only. Gemini sampling is bounded and independent of playback timing; Comfort-z does not analyze every video frame.
 
 ## Technology
 
-- **Gemini** (`gemini-3.5-flash`): multimodal, structured visual observations.
-- **Google ADK**: the `comfort_z` agent and tool orchestration.
-- **Firestore**: optional Cloud-ready observation history; local development defaults to JSON.
-- **Cloud Run**: deployment-ready Dockerfile.
+- **Gemini 3.5 Flash**: primary multimodal monitoring and reasoning model.
+- **Gemini 2.5 Flash**: optional, bounded Google Search-grounded research helper only.
+- **Google ADK**: agent and monitoring-tool orchestration.
+- **Cloud Run**: private HTTP runtime for the deployed hackathon service.
+- **Firestore**: persistent profiles, observations, owner updates, reports, and monitoring state.
+- **Google Cloud Storage**: private configured demo-video source where applicable.
+- **Secret Manager**: Gemini Developer API key in Cloud Run.
+- **Cloud Scheduler**: bounded recurring monitoring and reporting invocations.
+- **OpenCV**: local/video frame capture and sampling.
+- **Open-Meteo**: optional outdoor weather context.
+- **Vanilla HTML/CSS/JavaScript**: web dashboard.
 
-The runtime does not use OpenAI APIs or models.
-
-## Structure
-
-```text
-comfort_z/
-  agent.py                 # ADK agent named comfort_z
-  models.py                # Observation, profile, decision, and report schemas
-  services/                # Gemini, repositories, comparison, video, orchestration
-  tools/monitoring.py      # Agent-callable monitoring workflow tools
-tests/                      # Storage and policy tests
-```
+The runtime does not use OpenAI models or APIs. The deployed hackathon version uses the Gemini Developer API and API-key secret, not Vertex AI.
 
 ## Local setup
 
-Prerequisites: Python 3.11+ and a Gemini API key from Google AI Studio. For Vertex AI instead, use Application Default Credentials and set `GOOGLE_GENAI_USE_VERTEXAI=true`.
+Prerequisites: Python 3.11+ and a Gemini Developer API key from Google AI Studio.
 
 ```powershell
 py -3.11 -m venv .venv
@@ -54,7 +54,7 @@ pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 ```
 
-Set either `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env` (never commit it), then run:
+Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env`; never commit either value. Then run:
 
 ```powershell
 pytest -q
@@ -62,140 +62,131 @@ adk web --host 127.0.0.1 --port 8000 .
 python -c "from comfort_z.agent import root_agent; print(root_agent.name)"
 ```
 
-The final command should print `comfort_z` without calling Gemini. In ADK Web, select `comfort_z` and submit a request such as:
+The import check should print `comfort_z` without contacting Gemini. Vertex AI compatibility may remain available for local experimentation with Application Default Credentials and `GOOGLE_GENAI_USE_VERTEXAI=true`, but that is not the deployed hackathon configuration.
 
-```text
-Monitor animal_id "milo" using image_path "C:\\demo\\milo_today.jpg". Save it and explain whether I should monitor or act.
+## Configuration
+
+```dotenv
+# Primary Comfort-z monitoring model
+GEMINI_MODEL=gemini-3.5-flash
+
+# Optional conditional research only
+RESEARCH_PROVIDER=google_search
+RESEARCH_MODEL=gemini-2.5-flash
+
+# Persistence
+OBSERVATION_STORE=firestore
+GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+FIRESTORE_OBSERVATIONS_COLLECTION=observations
+
+# Gemini Developer API key: set one, never both in source control
+GOOGLE_API_KEY=
+# GEMINI_API_KEY=
 ```
 
-## Basic video monitoring
+`GEMINI_MODEL` remains the primary monitoring model. The Google Search research provider chooses its model in this order: an explicit provider model, `RESEARCH_MODEL`, then `gemini-2.5-flash`. It never falls back to `GEMINI_MODEL`.
 
-OpenCV samples a local video or webcam at a deliberate interval; it does not send every frame to Gemini. Each sample is saved through the existing `monitor_animal` workflow, including a source/frame description in the observation record.
+## Monitoring profiles and bounded video monitoring
 
-Test a local video (five samples, one every five seconds of video time):
+An owner profile records the animal, monitoring goal, optional expected species and enclosure/location context, connected source, sampling settings, daily sample budget, cursor, active state, and report schedule. A profile may exist before a source is connected; source-less profiles are stored honestly and monitoring exits without opening a camera, video, Gemini, or research provider.
+
+Each `next-window` call is finite. It reads the saved profile/cursor, analyzes only a small requested number of selected frames (never more than the remaining daily budget), persists results, and advances the cursor for the next invocation. Pre-recorded video therefore simulates continued monitoring without requiring a permanently open HTTP request. Transient Gemini 429/503 failures have bounded retries and cannot bypass the requested sample limit.
+
+OpenCV supports local video files and local webcams. A webcam needs access to the machine/device running Comfort-z; it is not a cloud camera-ingestion mechanism. A configured private `gs://bucket/object` video can be downloaded through Application Default Credentials to a temporary file for bounded OpenCV processing. The original `gs://` reference remains the persisted source metadata, and the temporary file is removed after processing.
+
+For private Cloud Storage sources, grant the Cloud Run runtime service account bucket-scoped `roles/storage.objectViewer` (or equivalent `storage.objects.get`). Comfort-z neither makes the bucket public nor creates signed URLs.
+
+## Monitoring source preview
+
+`GET /animals/{animal_id}/monitoring-source-preview` returns a read-only preview of that profile's configured **video** source.
+
+- It is profile-derived only; arbitrary local filesystem paths are never exposed.
+- It supports private `gs://` objects through the Cloud Run runtime credentials.
+- It supports browser byte ranges for video playback.
+- It does not start monitoring, sample Gemini, create observations, change budgets/cursors, or mutate monitoring state.
+- It does not create a public URL or signed URL.
+
+The preview is a visual reference, not a synchronized representation of Gemini's sampled frames.
+
+## Owner context and environment
+
+Owners can persist typed or voice-confirmed care updates such as feeding, care events, appetite/behaviour notes, availability, and direct measurements. A direct reading (for example, aquarium water temperature) is owner-reported historical context, not sensor telemetry and not a Gemini observation. It can inform a later interpretation, but cannot independently create a visual trend or alert.
+
+Outdoor Open-Meteo context is optional and separate from enclosure readings. It is requested only when a profile has the required coordinates. Comfort-z explicitly treats outdoor weather as context only: it must not assume that outdoor temperature equals aquarium, terrarium, room, cage, or other enclosure conditions. Location can be updated by the owner; the system does not automatically infer GPS, IP, or camera location.
+
+## Conditional grounded research
+
+Research is optional and disabled by default. It is considered only after a valid observation shows a worsening, recurring, alerting, or explicitly unresolved non-normal pattern. It is not run for normal, non-visible, uncertain, or isolated mild observations.
+
+Set `RESEARCH_PROVIDER=google_search` to enable the Google Search grounding provider. The provider uses the existing Gemini Developer API-key selection (`GOOGLE_API_KEY` or `GEMINI_API_KEY`) and the separate research-model precedence described above. It saves at most five concise citation-backed summaries, never raw web pages or full grounded responses. If search grounding is unavailable, quota-limited, empty, or uncited, monitoring and its existing alert decision continue unchanged. Matching successful research is reused for 24 hours.
+
+Google Search grounding is implemented and configurable, but successful live grounding was unavailable under the current quota/access during validation; it is not claimed as a demonstrated deployed result.
+
+## Storage
+
+Local development defaults to JSON state under ignored `data/` paths. With `OBSERVATION_STORE=firestore`, Comfort-z uses Application Default Credentials and persists data by animal, including:
+
+- observations: `animals/{animal_id}/observations/{observation_id}`
+- profile: `animals/{animal_id}/monitoring/profile`
+- owner updates: `animals/{animal_id}/owner_updates/{owner_update_id}`
+- reports: `animals/{animal_id}/reports/{report_id}`
+
+To enable Firestore locally, create a Firestore Native database, authenticate with Application Default Credentials, and set the store/project variables:
 
 ```powershell
-python -c "from comfort_z.services.video import VideoMonitoringService; result = VideoMonitoringService().monitor('raku', r'C:\\demo\\raku.mp4', sample_interval_seconds=5, max_samples=5, animal_name='Raku', expected_species='Betta splendens'); print(result.model_dump_json(indent=2))"
+gcloud config set project YOUR_PROJECT_ID
+gcloud auth application-default login
 ```
 
-Test webcam device 0 (five samples, one every five seconds of live time):
-
-```powershell
-python -c "from comfort_z.services.video import VideoMonitoringService; result = VideoMonitoringService().monitor('raku', 0, sample_interval_seconds=5, max_samples=5, animal_name='Raku', expected_species='Betta splendens'); print(result.model_dump_json(indent=2))"
+```dotenv
+OBSERVATION_STORE=firestore
+GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+FIRESTORE_OBSERVATIONS_COLLECTION=observations
 ```
 
-`max_samples` provides a normal bounded stop and limits total sampled-frame attempts, including failed Gemini analyses. Transient Gemini 429/503 responses retry only once by default, use a server retry delay when supplied (otherwise exponential backoff), and stop the session after retries are exhausted. You can tune `max_transient_retries`, `base_retry_delay_seconds`, and `stop_retry_delay_seconds` when calling `monitor`; conservative defaults protect the hackathon/free-tier quota. Code that runs a longer session can retain the service object and call `service.stop()`; an unavailable device, unreadable frame, encoding failure, or one Gemini failure is recorded in `failures` without crashing the session.
+If the configured Firestore store cannot initialize or respond, Comfort-z returns a useful storage error; it does not silently change stores.
 
-When `expected_species` is supplied, Gemini decides whether that expected animal is sufficiently visible instead of freely identifying another creature. Frames marked `animal_not_visible` or `uncertain` are stored for provenance but excluded from behavioural trends and alert persistence.
+## HTTP API
 
-## Bounded continuous monitoring demo
+Key endpoints exposed by the Cloud Run service include:
 
-Comfort-z can save a persistent goal such as **“Keep an eye on Raku”** without opening an endless process. A profile stores the video source, normal/elevated sample intervals, daily sample budget, cursor, active state, and report schedule. Each `next-window` invocation is intentionally finite: it reads the saved cursor, analyzes at most its small requested sample count (and never more than the remaining daily budget), writes observations through the existing workflow, and saves the next cursor. Calling it again resumes after the prior attempted video timestamp instead of restarting at zero.
+- `GET /health` - process health, primary model, ADK agent, and selected store; no external call.
+- `GET /animals` - persisted profiles for the dashboard.
+- `POST /monitoring/profiles`, `GET /monitoring/{animal_id}/profile` - profile persistence and retrieval.
+- `POST /monitoring/{animal_id}/start`, `POST /monitoring/{animal_id}/pause` - owner-controlled active state.
+- `POST /monitoring/{animal_id}/next-window` - one bounded monitoring operation.
+- `POST /monitoring/{animal_id}/daily-report`, `GET /animals/{animal_id}/reports` - persisted reports.
+- `GET /animals/{animal_id}/observations` - structured visual history.
+- `POST /animals/{animal_id}/owner-updates`, `GET /animals/{animal_id}/owner-updates` - owner-provided care context.
+- `POST /animals/{animal_id}/owner-update-drafts/voice` - short voice transcription/normalization draft; it does not persist an update until confirmed.
+- `PUT /monitoring/{animal_id}/location` - owner-provided location and optional coordinates.
+- `GET /environment/current` - read-only optional outdoor context for supplied coordinates.
+- `POST /animals/{animal_id}/profile-photo`, `POST /monitoring/{animal_id}/video-source` - bounded local/demo media upload routes.
+- `GET /animals/{animal_id}/monitoring-source-preview` - read-only configured-video preview.
 
-For a private Cloud Storage video, set a video profile's `source_reference` to a generic object URI such as `gs://YOUR_BUCKET/path/to/video.mp4`. Each bounded window uses Application Default Credentials (the Cloud Run runtime service account in Cloud Run) to download that object directly to a temporary file, passes only that file to OpenCV, then deletes it when the window completes or fails. The saved profile and observation provenance retain the original `gs://` URI, never the temporary path. Local paths and integer webcam sources continue to bypass Cloud Storage entirely. No signed URL, public bucket access, credential file, or new environment variable is required.
+The direct `/monitor` route remains available for an explicit one-off ADK monitoring invocation. Owner uploads are intentionally local/demo storage today: they are not durable across Cloud Run instance replacement until backed by durable private storage.
 
-Grant the runtime service account the bucket-scoped Storage Object Viewer role (`roles/storage.objectViewer`), or a custom role containing `storage.objects.get`, on each private media bucket it must read. The service does not list, upload, or modify media objects.
+## Cloud Run and Scheduler
 
-For local development, monitoring profiles and reports are stored in `data/monitoring_state.json`; set `LOCAL_MONITORING_STATE_FILE` to use another ignored path. With `OBSERVATION_STORE=firestore`, profiles use `animals/{animal_id}/monitoring/profile` and reports use `animals/{animal_id}/reports/{report_id}`. No credentials are stored in either repository.
+The deployed hackathon service runs on private/authenticated Cloud Run. The container listens on `0.0.0.0:$PORT`; its runtime service account uses Application Default Credentials for Firestore and private Cloud Storage. Store the Gemini Developer API key in Secret Manager and grant the runtime service account only the required Firestore, Secret Manager, and bucket-read permissions. Do not ship `.env`, service-account JSON, local data, or demo videos in the image.
 
-### Local owner media uploads
+The deployed project has bounded Cloud Scheduler jobs configured to call:
 
-The owner interface can save an optional profile photo (`JPEG`, `PNG`, or `WebP`, up to 5 MiB) and connect one uploaded monitoring video (`MP4`, `WebM`, or `MOV`, up to 100 MiB). The application gives each upload a server-generated reference under the ignored local media directory `data/media` (override with `LOCAL_MEDIA_DIR`); it never saves or shows an owner-supplied filesystem path. A video upload changes only that profile's single source, resets its source cursor, and leaves it paused until the owner starts monitoring. Uploading either kind of media never starts Gemini analysis.
+- monitoring next-window every 5 minutes
+- daily report at 08:00 `Asia/Kuching`
 
-This local/demo store is intentionally not durable on Cloud Run: container files can disappear whenever an instance is replaced. A deployed version needs a durable, private Cloud Storage-backed media-store implementation before owner uploads should be enabled there. Existing private `gs://` video sources remain a separate developer/deployment integration and are not exposed in the owner interface.
-
-Create a Raku video profile through the API:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/profiles -ContentType 'application/json' -Body '{"animal_id":"raku","animal_name":"Raku","expected_species":"Betta splendens","monitoring_goal":"Keep an eye on Raku.","source_reference":"C:\\demo\\Raku.mp4","source_type":"video","normal_sampling_interval_seconds":5,"elevated_sampling_interval_seconds":1,"daily_sample_budget":24,"report_time":"08:00","timezone":"Asia/Kuala_Lumpur"}'
-```
-
-Process the next two selected frames only:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/raku/next-window -ContentType 'application/json' -Body '{"window_max_samples":2}'
-```
-
-The first valid non-normal observation changes the saved profile to elevated sampling for a later invocation. Non-visible or uncertain frames never change the behavioural trend or sampling mode. Existing Gemini 429/503 bounds still apply inside each window. An inactive profile and an exhausted daily budget return a normal bounded result without opening the source.
-
-Generate a daily report after the configured monitoring period:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/monitoring/raku/daily-report
-Invoke-RestMethod -Uri http://127.0.0.1:8080/animals/raku/reports?limit=5
-```
-
-The report sends Gemini only structured saved observations, never the historical images or video frames. It separates valid behavioural evidence from `animal_not_visible` and `uncertain` counts, includes saved alert decisions, and persists the resulting report. A future Cloud Scheduler configuration can call the already-bounded `POST /monitoring/{animal_id}/next-window` and daily-report endpoints; this repository does not configure a scheduler.
-
-### Conditional research context
-
-Comfort-z evaluates optional external research only after a valid observation shows a worsening, recurring, alerting, or explicitly unresolved non-normal pattern. It does not search for normal, non-visible, uncertain-visibility, or first isolated mild observations. Research remains disabled by default. Set `RESEARCH_PROVIDER=google_search` to opt into the built-in Gemini Google Search grounding provider, which reuses `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) and `GEMINI_MODEL`; no second search key is needed. Each conditional call enables `types.Tool(google_search=types.GoogleSearch())`, persists at most five concise citation-backed source summaries, and never stores raw pages or the complete grounded response. Source quality is explicit (`authoritative`, `manufacturer_documentation`, `community`, or `unknown`); community material is always labelled anecdotal and cannot override authoritative guidance. Missing credentials, unavailable/quota-limited grounding, empty responses, and missing citations become a safe research failure without changing monitoring or alerts. Matching successful research is reused for 24 hours, and daily reports consume the saved context without refetching it.
-
-### Optional outdoor weather and enclosure readings
-
-A monitoring profile may include `location_name`, `latitude`, `longitude`, `enclosure_type`, and owner-provided `direct_environment_readings`. Weather is requested only when both coordinates are present. The built-in Open-Meteo adapter retrieves current outdoor 2 m air temperature, humidity, and weather condition without a configured API key; lookup failure is ignored so normal monitoring continues.
-
-Outdoor weather is supporting context only. Comfort-z explicitly tells Gemini that it must not equate outdoor conditions with an aquarium, terrarium, cage, room, or other enclosure. Owner readings are distinct structured records with `reading_type`, `value`, `unit`, `recorded_at`, and `source: "owner"`. For broadly hot or cold outdoor conditions, if no direct temperature reading is provided, Comfort-z can persist a request for an owner measurement; it does not change behavioural severity or fabricate an enclosure temperature.
-
-For example, an optional profile payload can include:
-
-```json
-{
-  "location_name": "Owner-provided location",
-  "latitude": 0.0,
-  "longitude": 0.0,
-  "enclosure_type": "aquarium",
-  "direct_environment_readings": [
-    {
-      "reading_type": "water_temperature",
-      "value": 26.0,
-      "unit": "C",
-      "source": "owner"
-    }
-  ]
-}
-```
-
-## Storage and alerts
-
-Default storage is `data/observations.json`. Firestore is used only when `OBSERVATION_STORE=firestore` and `GOOGLE_CLOUD_PROJECT` are set. It uses Application Default Credentials and stores records at `animals/{animal_id}/observations/{observation_id}`: the parent stores stable animal metadata and every observation document retains the existing structured observation payload. `FIRESTORE_OBSERVATIONS_COLLECTION` defaults to `observations`; leave `OBSERVATION_STORE=local` for the validated local fallback. The policy is intentionally simple: a first uncertain/concerning observation is saved for follow-up, while a visible worsening or at least two concerning results among the newest three observations creates an alert. It never makes medical diagnoses.
-
-### Enable Firestore locally
-
-1. Create or select a Google Cloud project, then enable the Firestore API and create a Firestore database in Native mode.
-2. Install and initialize the Google Cloud CLI, set the active project, and create Application Default Credentials:
-
-   ```powershell
-   gcloud config set project YOUR_PROJECT_ID
-   gcloud auth application-default login
-   ```
-
-3. In `.env`, set `OBSERVATION_STORE=firestore` and `GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID`. Optionally set `FIRESTORE_OBSERVATIONS_COLLECTION=observations`.
-4. Run the normal Comfort-z command. If Firestore cannot initialize or respond, Comfort-z reports a storage error with credential/network guidance; it never silently changes the configured store.
-
-## Cloud Run deployment preparation
-
-The container starts the minimal HTTP API with Uvicorn at `0.0.0.0:$PORT`. It provides:
-
-- `GET /health` — process health, selected store, ADK agent, and model; no external request.
-- `POST /monitor` — calls the existing `monitor_animal` ADK tool with `animal_id`, `image_path`, and optional animal metadata.
-- `GET /animals/{animal_id}/observations?limit=5` — calls the existing repository-backed history tool.
-- `POST /monitoring/profiles` — saves an active/inactive bounded monitoring profile.
-- `GET /monitoring/{animal_id}/profile` — retrieves a saved profile.
-- `POST /monitoring/{animal_id}/next-window` — processes one finite source window.
-- `POST /monitoring/{animal_id}/daily-report` — generates one persisted daily report from structured history.
-- `GET /animals/{animal_id}/reports?limit=5` — retrieves persisted reports.
-
-Before deploying, create a Firestore Native database, enable Cloud Run, Cloud Build, Artifact Registry, Firestore, and Secret Manager APIs, then create a dedicated Cloud Run service account. Grant it `roles/datastore.user` for Firestore and `roles/secretmanager.secretAccessor` for the Gemini API-key secret. Cloud Run uses this service account as Application Default Credentials for Firestore; do not upload service-account JSON files.
-
-Create a Secret Manager secret named `comfort-z-gemini-api-key` containing only your Gemini Developer API key. Then deploy from the repository root:
-
-```powershell
-gcloud run deploy comfort-z --source . --region YOUR_REGION --project YOUR_PROJECT_ID --service-account comfort-z-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com --set-env-vars OBSERVATION_STORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,FIRESTORE_OBSERVATIONS_COLLECTION=observations,GEMINI_MODEL=gemini-3.5-flash --set-secrets GOOGLE_API_KEY=comfort-z-gemini-api-key:latest
-```
-
-The container image excludes `.env`, virtual environments, local JSON data, ADC files, service-account/credential JSON files, tests, and demo videos. Use `GET /health` after deployment to confirm startup. For a Vertex AI configuration instead of a Gemini API-key secret, set `GOOGLE_GENAI_USE_VERTEXAI=true` and grant the service account the appropriate Vertex AI role.
+These jobs may be intentionally paused for quota-controlled demo operation. Scheduler invokes finite HTTP operations; Comfort-z does not rely on a continuously running Cloud Run request or process.
 
 ## Demo flow and limitations
 
-Submit an image for Milo to establish a baseline; submit a second image with the same potential issue to demonstrate retrieved history and a persistence alert; submit an improved image to show the trend change. The MVP accepts image files (or any simple Gemini-supported visual MIME type accessible by the server). It does not diagnose disease, provide multi-instance local persistence, or yet ingest full videos/scheduled rechecks—those are natural next steps.
+The hackathon demo uses a persistent Raku monitoring profile and pre-recorded animal footage as controlled input. A private Cloud Storage source is processed by Cloud Run in bounded windows; Gemini 3.5 Flash interprets selected frames; Firestore history is retrieved and compared; and a persistent concerning pattern can produce an explainable application alert. Owner-provided direct readings and optional outdoor context can inform interpretation. The dashboard shows stored observations and a reference-video preview, while daily reports summarize the saved structured history.
+
+Limitations:
+
+- Pre-recorded demo footage is not claimed as a live camera feed.
+- Dashboard playback and Gemini frame sampling are independent and not synchronized.
+- Local webcam monitoring requires access to the local machine and device.
+- Alerts are surfaced by the application; push/email notification delivery is not implemented.
+- Animal-care output is non-diagnostic.
+- Optional grounded research may be unavailable because of provider access or quota.
+- Local uploaded media is not durable after Cloud Run instance replacement unless it is backed by durable private storage.
