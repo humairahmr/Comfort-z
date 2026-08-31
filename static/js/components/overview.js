@@ -131,7 +131,7 @@ function createHero(profile, navigate) {
   hero.tabIndex = 0;
   hero.setAttribute('aria-label', `Open monitoring console for ${name}`);
   hero.innerHTML = `
-    <div class="animal-hero-visual-wrap">
+    <div class="animal-hero-visual-wrap${profileImageSource(profile) ? ' has-profile-photo' : ''}">
       ${renderAnimalVisual(profile, { className: 'animal-hero-visual', alt: `Profile of ${name}` })}
       ${profileImageSource(profile) ? '' : '<span class="visual-disclaimer">Decorative profile fallback</span>'}
     </div>

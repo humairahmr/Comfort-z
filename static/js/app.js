@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { renderAllAnimals, renderMonitoringPage, renderOverview } from './components/overview.js';
 import { renderAddAnimalOnboarding } from './components/onboarding.js';
 import { renderDashboard } from './components/dashboard.js';
+import { loadCurrentEnvironment } from './components/environment-current.mjs';
 
 const appRoot = document.getElementById('app-root');
 const healthAgent = document.getElementById('health-agent');
@@ -139,10 +140,11 @@ async function loadDashboardRoute(animalId) {
       renderAnimalNotFound(animalId);
       return;
     }
-    const [observations, reports, ownerUpdates] = await Promise.all([
+    const [observations, reports, ownerUpdates, currentEnvironment] = await Promise.all([
       api.getObservations(animalId, 10).catch(() => []),
       api.getReports(animalId, 5).catch(() => []),
       api.getOwnerUpdates(animalId, 20).catch(() => []),
+      loadCurrentEnvironment(profile, (request) => api.getCurrentEnvironment(request)),
     ]);
 
     state.selectedAnimalId = animalId;
@@ -167,7 +169,8 @@ async function loadDashboardRoute(animalId) {
               throw new Error('Update was saved, but Care updates could not be refreshed. Please use Refresh updates; do not submit it again.');
             }
             renderWithOwnerUpdates(refreshedUpdates);
-          }
+          },
+          currentEnvironment,
         )
       );
     };

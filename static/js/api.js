@@ -191,6 +191,15 @@ export class ApiClient {
     });
   }
 
+  async getCurrentEnvironment({ latitude, longitude, locationName = null }) {
+    const parameters = new URLSearchParams({
+      latitude: String(latitude),
+      longitude: String(longitude),
+    });
+    if (locationName) parameters.set('location_name', locationName);
+    return this.fetchJson(`/environment/current?${parameters.toString()}`);
+  }
+
   async previewLocalCamera(cameraIndex) {
     if (!Number.isInteger(cameraIndex) || cameraIndex < 0) {
       throw new Error('Enter a whole camera index of 0 or higher.');

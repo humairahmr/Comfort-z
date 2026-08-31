@@ -14,6 +14,8 @@ import {
 import { profileImageSource, renderAnimalVisual } from './silhouettes.js';
 import { createCameraPreviewController, createCameraPreviewState } from './camera-preview.mjs';
 import { runAsyncControl } from './async-action.mjs';
+import { createAmbientWeatherView } from './environment-current.mjs';
+import { populateCoordinateFields, requestBrowserLocation } from './geolocation.mjs';
 import { createVoiceUpdatePanel } from './voice-update.js';
 import {
   formatDirectReadingValue,
@@ -46,7 +48,8 @@ export function renderDashboard(
   ownerUpdates,
   navigate,
   onRefresh,
-  onOwnerUpdatesRefresh
+  onOwnerUpdatesRefresh,
+  currentEnvironment,
 ) {
   const container = document.createElement('div');
   container.className = 'dashboard-container';
@@ -85,7 +88,7 @@ export function renderDashboard(
   consoleLayout.appendChild(createObservationStage(animalId, profile, latestObs, onRefresh));
 
   // Section 2: Full-Width Dual-Context Environmental Reasoning Ribbon (No Boxy Cards)
-  consoleLayout.appendChild(createTelemetryRibbon(profile, latestObs, ownerUpdates));
+  consoleLayout.appendChild(createTelemetryRibbon(profile, latestObs, ownerUpdates, currentEnvironment));
 
   // Section 3: Longitudinal Intelligence & Archives (Open, Asymmetric Architecture)
   const intelLayout = document.createElement('div');
@@ -406,6 +409,10 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
       <div class="profile-location-coordinates">
         <label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" value="${profile && profile.latitude != null ? escapeHtml(profile.latitude) : ''}" placeholder="1.5533"></label>
         <label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" value="${profile && profile.longitude != null ? escapeHtml(profile.longitude) : ''}" placeholder="110.3592"></label>
+        <div class="profile-location-detect">
+          <button type="button" class="btn btn-secondary" data-use-location>Use my location</button>
+          <span>Requested only when you choose this button.</span>
+        </div>
       </div>
       <div class="profile-location-actions">
         <button type="button" class="btn btn-secondary" data-cancel-location>Cancel</button>
@@ -447,6 +454,7 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   const sourcePreviewButtons = section.querySelectorAll('[data-preview]');
   const sourceSubmit = form.querySelector('[type="submit"]');
   const locationSubmit = locationForm.querySelector('[type="submit"]');
+  const useLocationButton = locationForm.querySelector('[data-use-location]');
   let sourceMode = initialSourceMode;
   const setSourceMode = (mode) => {
     sourceMode = mode;
@@ -537,6 +545,18 @@ function createMonitoringLifecycleControls(animalId, profile, onRefresh) {
   section.querySelector('[data-cancel-location]').addEventListener('click', () => {
     locationForm.hidden = true;
     message.textContent = '';
+  });
+  useLocationButton.addEventListener('click', async () => {
+    message.textContent = 'Requesting your location…';
+    try {
+      await runAsyncControl(useLocationButton, async () => {
+        const coordinates = await requestBrowserLocation();
+        populateCoordinateFields(locationForm, coordinates);
+        message.textContent = 'Coordinates added. Review them, add a location label if useful, then save.';
+      });
+    } catch (error) {
+      message.textContent = error.message;
+    }
   });
   sourceOptions.forEach((option) => option.addEventListener('click', () => setSourceMode(option.dataset.sourceMode)));
   sourcePreviewButtons.forEach((button) => button.addEventListener('click', showPreview));
@@ -706,7 +726,7 @@ function createAnimalHero(animalId, profile, latestObs) {
       </div>
     </div>
 
-    <div class="hero-portrait-frame">
+    <div class="hero-portrait-frame${hasProfilePhoto ? ' has-profile-photo' : ''}">
       ${photoHtml}
       ${hasProfilePhoto ? '' : '<span class="hero-silhouette-caption">Decorative profile fallback</span>'}
     </div>
@@ -921,7 +941,7 @@ function createObservationStage(animalId, profile, latestObs, onRefresh) {
 /**
  * 2. Full-Width Dual-Context Environmental Reasoning Ribbon (No Boxy Cards)
  */
-function createTelemetryRibbon(profile, latestObs, ownerUpdates) {
+function createTelemetryRibbon(profile, latestObs, ownerUpdates, currentEnvironment) {
   const ribbon = document.createElement('section');
   ribbon.className = 'telemetry-ribbon';
   ribbon.setAttribute('aria-label', 'Environmental Telemetry Context');
@@ -935,11 +955,25 @@ function createTelemetryRibbon(profile, latestObs, ownerUpdates) {
   const readings = (latestObs && latestObs.direct_environment_readings) ||
                    (profile && profile.direct_environment_readings) || [];
 
-  const envContext = latestObs && latestObs.environment_context;
-  const locationName = (envContext && envContext.location_name) || (profile && profile.location_name) || 'Location not recorded';
-  const outdoorTemp = envContext && envContext.outdoor_temperature_c != null ? envContext.outdoor_temperature_c + '°C' : 'Not recorded';
-  const outdoorHum = envContext && envContext.outdoor_humidity_percent != null ? envContext.outdoor_humidity_percent + '%' : 'Not recorded';
-  const weatherCond = envContext && envContext.weather_condition ? envContext.weather_condition : 'Not recorded';
+  const ambient = createAmbientWeatherView({
+    profile,
+    currentEnvironment,
+    latestObservation: latestObs,
+  });
+  const ambientDetails = [
+    ambient.condition,
+    ambient.humidity ? `${ambient.humidity} humidity` : null,
+  ].filter(Boolean).join(' • ');
+  const ambientStatus = ambient.status === 'unavailable'
+    ? 'Current outdoor weather could not be retrieved. Try again later.'
+    : ambient.status === 'not_configured'
+      ? 'Add a location and coordinates to show current outdoor weather.'
+      : ambient.historical
+        ? 'Last recorded outdoor context. Save coordinates to retrieve current conditions independently.'
+        : 'Current conditions for the saved location.';
+  const ambientProvenance = ambient.provider
+    ? `${ambient.provider}${ambient.observedAt ? ` • Observed ${formatTimestamp(ambient.observedAt)}` : ''}`
+    : 'No current weather source available';
 
   // Left Half: Ambient Outdoor Weather (Step 1 in Reasoning Chain)
   const halfOutdoor = document.createElement('div');
@@ -947,17 +981,17 @@ function createTelemetryRibbon(profile, latestObs, ownerUpdates) {
   halfOutdoor.innerHTML = `
     <div class="ribbon-header" style="color: var(--color-primary);">
       <span class="badge-dot" style="background-color: var(--color-primary);"></span>
-      <span>1. Ambient Meteorological Context (${escapeHtml(locationName)})</span>
+      <span>1. Ambient / Outdoor Weather (${escapeHtml(ambient.locationName)})</span>
     </div>
     <div style="display: flex; align-items: baseline; gap: var(--space-3);">
-      <span class="ribbon-value-lead">${escapeHtml(outdoorTemp)}</span>
-      <span class="ribbon-sub-metric" style="text-transform: capitalize;">${escapeHtml(weatherCond)} • ${escapeHtml(outdoorHum)} humidity</span>
+      <span class="ribbon-value-lead${ambient.status === 'available' || ambient.status === 'historical' ? '' : ' is-unavailable'}">${escapeHtml(ambient.temperature)}</span>
+      ${ambientDetails ? `<span class="ribbon-sub-metric" style="text-transform: capitalize;">${escapeHtml(ambientDetails)}</span>` : ''}
     </div>
     <div class="ribbon-reasoning-flow">
-      <strong>Environmental Context:</strong> Ambient outdoor conditions inform baseline thermal exposure and seasonal behavioral expectations.
+      <strong>Outdoor context:</strong> ${escapeHtml(ambientStatus)}
     </div>
     <p class="ribbon-provenance-caption">
-      OPEN-METEO METEOROLOGICAL CONTEXT • NOT AN ENCLOSURE SENSOR READING
+      ${escapeHtml(ambientProvenance)} • NOT AN ENCLOSURE SENSOR READING
     </p>
   `;
   ribbon.appendChild(halfOutdoor);

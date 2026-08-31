@@ -18,10 +18,15 @@ from starlette.concurrency import run_in_threadpool
 from comfort_z.agent import root_agent
 from comfort_z.models import (
     DirectEnvironmentReading,
+    EnvironmentContext,
     MonitoringProfile,
     MonitoringSourceType,
     OwnerUpdateCategory,
     VoiceOwnerUpdateDraftResponse,
+)
+from comfort_z.services.environment import (
+    EnvironmentLookupError,
+    OpenMeteoEnvironmentProvider,
 )
 from comfort_z.services.repository import ObservationRepositoryError, get_monitoring_state_repository
 from comfort_z.services.orchestration import (
@@ -273,6 +278,34 @@ def health() -> dict[str, str]:
         "model": str(root_agent.model),
         "observation_store": os.getenv("OBSERVATION_STORE", "local").lower(),
     }
+
+
+@app.get("/environment/current", response_model=EnvironmentContext)
+async def current_environment(
+    latitude: float = Query(ge=-90, le=90),
+    longitude: float = Query(ge=-180, le=180),
+    location_name: str | None = Query(default=None, max_length=160),
+) -> EnvironmentContext:
+    """Return current outdoor context without mutating monitoring or observation state."""
+    try:
+        return await run_in_threadpool(
+            OpenMeteoEnvironmentProvider().get_current_context,
+            location_name=location_name.strip() if location_name else None,
+            latitude=latitude,
+            longitude=longitude,
+        )
+    except EnvironmentLookupError as error:
+        logger.warning("Current outdoor weather lookup failed: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Outdoor weather context is temporarily unavailable.",
+        ) from error
+    except Exception as error:
+        logger.warning("Current outdoor weather lookup failed: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Outdoor weather context is temporarily unavailable.",
+        ) from error
 
 
 @app.get("/media/{media_kind}/{filename}")
